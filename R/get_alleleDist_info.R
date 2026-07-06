@@ -39,11 +39,15 @@ gen_param_list = function(snp_info_file,
         
 
         # get the analysis id
-        snp_info_vec = strsplit(snp_info_file, "/")[[1]]
-        snp_batch_id = gsub(".csv", "", snp_info_vec[length(snp_info_vec)])
+        snp_batch_id = gsub("\\.csv$", "", basename(snp_info_file))
+        snp_batch_id = gsub("\\.tsv$", "", snp_batch_id)
 
         if (is.na(output_file)) {
-                output_file = paste0(output_dir, "/", snp_batch_id, "_", sample_name, "_alleleDist.csv")
+                if (grepl("\\.tsv$", snp_info_file, ignore.case = TRUE)) {
+                        output_file = paste0(output_dir, "/", snp_batch_id, "_", sample_name, "_alleleDist.tsv")
+                } else {
+                        output_file = paste0(output_dir, "/", snp_batch_id, "_", sample_name, "_alleleDist.csv")
+                }
         }
 
         param_list =
@@ -63,7 +67,7 @@ gen_param_list = function(snp_info_file,
 
 # step 1: process snp information ---------------------------------------------------------------------------------
 
-read_inputSNP_file = function(snp_info_file) {
+read_inputSNP_file = function(snp_info_file, chromosome_annotation = "chr") {
         # Aim: to parse the snp information for further use
         # Input: snp_info file, should contain at least the following fields:
         # 1. rsID
@@ -74,14 +78,29 @@ read_inputSNP_file = function(snp_info_file) {
         # Output: a list that contain basic information of those SNPs
 
         # read and parse snp information file
-        snp_info_df = read.csv(snp_info_file, header= T)
+        if (is.character(snp_info_file)) {
+                if (grepl("\\.tsv$", snp_info_file, ignore.case = TRUE)) {
+                        snp_info_df = read.delim(snp_info_file, header = T, sep = "\t", row.names = NULL)
+                } else {
+                        snp_info_df = read.csv(snp_info_file, header = T)
+                }
+        } else {
+                snp_info_df <- snp_info_file
+        }
         head(snp_info_df)
         snp_info_df = arrange(snp_info_df, as.numeric(gsub("chr", "", chr)), pos)
         snp_id = as.character(snp_info_df$rsID)
         snp_ref = as.character(snp_info_df$ref)
         snp_alt = as.character(snp_info_df$alt)
         chr = as.character(snp_info_df$chr)
-        snp_chr = ifelse (grepl("chr", chr), chr, paste0("chr", chr))
+
+        if (chromosome_annotation == "chr") {
+                snp_chr = ifelse (grepl("chr", chr), chr, paste0("chr", chr))
+        } else if (chromosome_annotation == "no_chr") {
+                snp_chr = ifelse (grepl("chr", chr), sub(".*chr", "", chr), chr)
+        } else {
+                stop("requires chromosome annotation: ['chr'|'no_chr']")
+        }
         snp_pos = as.numeric(as.character(snp_info_df$pos))
         which = GRanges(seqnames = snp_chr, ranges = IRanges(start = snp_pos,end = snp_pos))
         names(which) = snp_id
@@ -487,7 +506,8 @@ get_alleleDist_info_main = function(
         server = "local",
         bam_dir = "./",
         rmdup_file = F,
-        merge_replicates = F
+        merge_replicates = F,
+        chromosome_annotation = "chr"
 ) {
 
         ### -------------------- step 0-1: load the packages -------------------- ###
@@ -509,7 +529,8 @@ get_alleleDist_info_main = function(
         cat("output file name:", param_list$output_file, '\n')
 
         ### ----------------------- step 1: get the snp ----------------------- ###
-        snp_info_list = read_inputSNP_file(snp_info_file= snp_info_file)
+        snp_info_list = read_inputSNP_file(snp_info_file = snp_info_file,
+                                           chromosome_annotation = chromosome_annotation)
 
         ### ------- step 2: read bam files that contain the snp region -------- ###
         if (server != "local") {
@@ -543,19 +564,24 @@ get_alleleDist_info_main = function(
                 bam_list = bam_super_list[[i]]
                 bam_list_add_bam_sample_info = add_bam_sample_info(bam_list= bam_list,
                                                                    bam_lib= bam_lib)
+                cat(paste(bam_files[[i]], "step_3.1", sep = "_"))
 
                 # step 3-2: add base quality information
                 bam_list_add_bam_base_q = add_bam_base_info(bam_list= bam_list_add_bam_sample_info,
                                                             snp_info_list = snp_info_list)
+                cat(paste(bam_files[[i]], "step_3.2", sep = "_"))
 
                 # step 3-3: filter low base/mapping quality reads --- after this step, we can get relatively clean data
                 bam_list_filter = filter_bam_list(bam_list= bam_list_add_bam_base_q, param_list)
+                cat(paste(bam_files[[i]], "step_3.3", sep = "_"))
 
                 # step 3-4: calculate allele-distribution statistics
                 bam_list_add_stats = add_bam_reads_stats(bam_list= bam_list_filter)
+                cat(paste(bam_files[[i]], "step_3.4", sep = "_"))
 
                 # step 3-5: generate allele-distribution table
                 ad_table_i = gen_allele_distribution_table(bam_list= bam_list_add_stats)
+                cat(paste(bam_files[[i]], "step_3.5", sep = "_"))
 
                 # add allele-distribution table together
                 ad_table = rbind(ad_table, ad_table_i)
@@ -568,7 +594,11 @@ get_alleleDist_info_main = function(
         ad_table = filter(ad_table, !(ref == 0 & alt == 0))
         # write down allele-distribution table
         if (param_list$output_file != F) { # if output_file == F, do not write down file
-                write.csv0(ad_table, param_list$output_file)
+                if (grepl("\\.tsv$", param_list$output_file, ignore.case = TRUE)) {
+                        write.tsv0(ad_table, param_list$output_file)
+                } else {
+                        write.csv0(ad_table, param_list$output_file)
+                }
         }
 
         cat("allele-distribution for SNPs written ... \n")

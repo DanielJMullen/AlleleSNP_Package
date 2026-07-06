@@ -1,4 +1,4 @@
-# Main functiget_assnp
+# Main function get_assnp
 ## ==================================================================================
 ## Function: get_ase_snp
 ###  Aim: To get allele-specific SNP
@@ -29,13 +29,30 @@ get_assnp = function(index_snp_file = NA,
                      min_ldsnp_num = 1,
                      read_count_cutoff = 100,
                      use_encode_cnv = F,
+                     output_dir = NA,
+                     output_file = NA,
+                     chromosome_annotation = "chr",
                      ...) {
 
-        # 0. make a directory for data storation
-        index_snp_file_vec = strsplit(index_snp_file, "/")[[1]]
-        snp_batch_id = gsub(".csv", "", index_snp_file_vec[length(index_snp_file_vec)])
+        # 0. make a directory for data storage
+        if (is.na(output_dir)) {
+                if (!is.na(index_snp_file)) {
+                        index_snp_file_vec = strsplit(index_snp_file, "/")[[1]]
+                        snp_batch_id = gsub(".csv", "", index_snp_file_vec[length(index_snp_file_vec)])
+                        snp_batch_id = gsub(".tsv", "", snp_batch_id)
+                } else if (!is.na(snp_info_file)) {
+                        snp_info_file_vec = strsplit(snp_info_file, "/")[[1]]
+                        snp_batch_id = gsub(".csv", "", snp_info_file_vec[length(snp_info_file_vec)])
+                        snp_batch_id = gsub(".tsv", "", snp_batch_id)
+                } else {
+                        stop("index_snp_file or snp_info_file required")
+                }
+                output_dir <- paste0("./", snp_batch_id, "_", sample_name, "_assnp")
+        }
 
-        dir.create(output_dir <- paste0("./", snp_batch_id, "_", sample_name, "_assnp"))
+        if (!dir.exists(output_dir)) {
+                dir.create(output_dir, recursive = TRUE)
+        }
 
         # 1. get ld snp file
         if (!is.na(index_snp_file)) {
@@ -44,21 +61,28 @@ get_assnp = function(index_snp_file = NA,
                 snp_info_file = snp_info_list$output_file
         }
 
+        if (is.na(snp_info_file)) {
+                stop("snp_info_file required")
+        }
+
         # 2. get allele distribution
         snp_info_alleleDist_list = get_alleleDist_info_main(snp_info_file = snp_info_file,
                                                             bam_dir = bam_dir,
                                                             output_dir = output_dir,
                                                             sample_name = sample_name,
+                                                            output_file = output_file,
                                                             base_qual_threshold = base_qual_threshold,
                                                             mapq_threshold = mapq_threshold,
-                                                            merge_replicates = merge_replicates, ...)
+                                                            merge_replicates = merge_replicates,
+                                                            chromosome_annotation = chromosome_annotation, ...)
 
         # 3. get peak annotation
         if (!is.na(peak_dir)) {
                 snp_info_addPeak_list = get_peak_info_main(snp_info_file = snp_info_file,
                                                            peak_dir = peak_dir,
                                                            output_dir = output_dir,
-                                                           sample_name = sample_name)
+                                                           sample_name = sample_name,
+                                                           chromosome_annotation = chromosome_annotation)
         } else {
                 snp_info_addPeak_list = list()
                 snp_info_addPeak_list$output_file = NA
@@ -81,7 +105,7 @@ get_assnp = function(index_snp_file = NA,
                 snp_info_addCnv_list = get_encodeCnv_info_main(snp_info_file = snp_info_file,
                                                                 output_dir = output_dir,
                                                                 sample_name = sample_name)
-        } else if (!is.na(index_snp_file) & !is.na(vcf_file_for_cnv)) {
+        } else if (!is.na(index_snp_file) && !is.na(vcf_file_for_cnv)) {
                 ## if have index snp and vcf_file_for_cnv (wgs vcf data file)
                 snp_info_addCnv_list = get_cnv_info_main(index_snp_file = index_snp_file,
                                                          snp_info_file = snp_info_file,

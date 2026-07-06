@@ -11,12 +11,24 @@
 
 gen_output_file_ase = function(snp_info_file, output_dir = "./") {
         # Aim: to get output file name
-        snp_info_vec = strsplit(snp_info_file, "/")[[1]]
-        snp_batch_id = gsub(".csv", "", snp_info_vec[length(snp_info_vec)])
-        output_file = paste0(output_dir, "/", snp_batch_id, "_ase_snp.csv")
+        snp_batch_id = basename(snp_info_file)
+        snp_batch_id = gsub("\\.csv$", "", snp_batch_id)
+        snp_batch_id = gsub("\\.tsv$", "", snp_batch_id)
 
+        if (grepl("\\.tsv$", snp_info_file, ignore.case = TRUE)) {
+                output_file = paste0(output_dir, "/", snp_batch_id, "_ase_snp.tsv")
+        } else {
+                output_file = paste0(output_dir, "/", snp_batch_id, "_ase_snp.csv")
+        }
         return (output_file)
+}
 
+read.table_auto = function(file) {
+        if (grepl("\\.tsv$", file, ignore.case = TRUE)) {
+                read.delim(file, header = T, sep = "\t", row.names = NULL)
+        } else {
+                read.csv(file, header = T)
+        }
 }
 
 # 1. infer genotype from bam files only ---------------------------------------------------------------------------
@@ -91,7 +103,7 @@ add_vcf_res = function(snp_info_alleleDist_df, snp_info_vcf_file) {
                 return(snp_info_alleleDist_df)
         }
 
-        snp_info_vcf_df = read.csv(snp_info_vcf_file)
+        snp_info_vcf_df = read.table_auto(snp_info_vcf_file)
         rownames(snp_info_vcf_df) = as.character(snp_info_vcf_df$rsID)
         # head(snp_info_vcf_df)
 
@@ -122,7 +134,7 @@ add_peak_res = function(snp_info_alleleDist_df, snp_info_peak_file) {
                 return(snp_info_alleleDist_df)
         }
 
-        snp_info_peak_df = read.csv(snp_info_peak_file)
+        snp_info_peak_df = read.table_auto(snp_info_peak_file)
         rownames(snp_info_peak_df) = as.character(snp_info_peak_df$rsID)
         # head(snp_info_peak_df)
         snp_info_peak_df_sel = snp_info_peak_df[, grepl("biofeature", names(snp_info_peak_df))]
@@ -148,7 +160,7 @@ add_cnv_res = function(snp_info_alleleDist_df, snp_info_cnv_file) {
                 return (snp_info_alleleDist_df)
         }
 
-        snp_info_cnv_df = read.csv(snp_info_cnv_file)
+        snp_info_cnv_df = read.table_auto(snp_info_cnv_file)
 
         rownames(snp_info_cnv_df) = as.character(snp_info_cnv_df$rsID)
         head(snp_info_cnv_df)
@@ -174,7 +186,7 @@ add_cnv_res_encode = function(snp_info_alleleDist_df, snp_info_cnv_file) {
                 return (snp_info_alleleDist_df)
         }
 
-        snp_info_cnv_df = read.csv(snp_info_cnv_file)
+        snp_info_cnv_df = read.table_auto(snp_info_cnv_file)
         rownames(snp_info_cnv_df) = as.character(snp_info_cnv_df$rsID)
         head(snp_info_cnv_df)
 
@@ -307,7 +319,7 @@ get_ase_snp_main = function(snp_info_alleleDist_file,
         }
         cat("    output file name:", output_file, '\n')
 
-        snp_info_alleleDist_df = read.csv(snp_info_alleleDist_file)
+        snp_info_alleleDist_df = read.table_auto(snp_info_alleleDist_file)
         head(snp_info_alleleDist_df)
         # 1. get genotype from allelic distribution
         snp_info_alleleDist_df = infer_genotype_from_reads(snp_info_alleleDist_df = snp_info_alleleDist_df,
@@ -342,7 +354,11 @@ get_ase_snp_main = function(snp_info_alleleDist_file,
         }
 
         if (output_file != F) { # if output_file == F, do not write down file
-                write.csv0(snp_info_alleleDist_df, output_file)
+                if (grepl("\\.tsv$", output_file, ignore.case = TRUE)) {
+                        write.tsv0(snp_info_alleleDist_df, output_file)
+                } else {
+                        write.csv0(snp_info_alleleDist_df, output_file)
+                }
         }
         cat("allele-specific effects information added ... \n")
 

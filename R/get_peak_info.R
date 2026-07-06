@@ -28,12 +28,14 @@ load_packages_2.2 = function(){
 
 gen_output_file_peakInfo = function(snp_info_file, output_dir = "./", sample_name = "") {
 # Aim: to get output file name
-        snp_info_vec = strsplit(snp_info_file, "/")[[1]]
-        snp_batch_id = gsub(".csv", "", snp_info_vec[length(snp_info_vec)])
-        output_file = paste0(output_dir, "/", snp_batch_id, "_", sample_name, "_peakAnnotation.csv")
-
+        snp_batch_id = gsub("\\.csv$", "", basename(snp_info_file))
+        snp_batch_id = gsub("\\.tsv$", "", snp_batch_id)
+        if (grepl("\\.tsv$", snp_info_file, ignore.case = TRUE)) {
+                output_file = paste0(output_dir, "/", snp_batch_id, "_", sample_name, "_peakAnnotation.tsv")
+        } else {
+                output_file = paste0(output_dir, "/", snp_batch_id, "_", sample_name, "_peakAnnotation.csv")
+        }
         return (output_file)
-
 }
 
 
@@ -44,7 +46,7 @@ read_peak_files = function(peak_dir){
 # Input: peak dir
 # Output: peak GRange object
 
-        files = list.files(path=peak_dir, pattern="[.P][be][ea][dk]$")
+        files = list.files(path = peak_dir, pattern = "[.P][be][ea][dk]$|\\.bed(\\.gz)?$|\\.narrowPeak(\\.gz)?$|\\.broadPeak(\\.gz)?$")
         n = length(files)
         peak_gr_list = replicate(n,list(vector()))
 
@@ -56,9 +58,10 @@ read_peak_files = function(peak_dir){
                 if (length(grep ("bed", files[i])) == 1) {
                         file_i = paste0(peak_dir, files[i])
                         peak_gr_list[[i]] = import(file_i)
-                } else if (length(grep ("narrowPeak", files[i])) == 1){
+                } else if (length(grep("narrowPeak", files[i])) == 1) {
                         file_i = paste0(peak_dir, files[i])
-                        peak_gr_list[[i]] = import(file_i, format = "bedGraph")
+                        extraCols <- c(signalValue = "numeric", pValue = "numeric", qValue = "numeric", peak = "integer")
+                        peak_gr_list[[i]] = import(file_i, format = "BED", extraCols = extraCols)
                 } else if (length(grep ("broadPeak", files[i])) == 1){
                         file_i = paste0(peak_dir, files[i])
                         peak_gr_list[[i]] = import(file_i, format = "bedGraph")
@@ -137,7 +140,12 @@ add_overlap_info = function(snp_info_df, overlap_mat) {
 
 # main function ---------------------------------------------------------------------------------------------------
 
-get_peak_info_main = function(snp_info_file, peak_dir, output_dir = "./", sample_name = "", output_file = NA) {
+get_peak_info_main = function(snp_info_file,
+                                peak_dir,
+                                output_dir = "./",
+                                sample_name = "",
+                                output_file = NA,
+                                chromosome_annotation = "chr") {
         # 0. load packages
         load_packages_2.2()
         cat("get peak information for SNPs ... \n")
@@ -151,7 +159,7 @@ get_peak_info_main = function(snp_info_file, peak_dir, output_dir = "./", sample
         cat("    output file name:", output_file, '\n')
         # 1. read snp file into data frame
         # snp_list should contain both the df and GRange object
-        snp_info_list = read_inputSNP_file(snp_info_file)
+        snp_info_list = read_inputSNP_file(snp_info_file, chromosome_annotation = chromosome_annotation)
 
         # 2. read peak files into a list of GRange object
         peak_gr_list = read_peak_files(peak_dir)
@@ -164,8 +172,12 @@ get_peak_info_main = function(snp_info_file, peak_dir, output_dir = "./", sample
         snp_info_addPeak_df = add_overlap_info(snp_info_df = snp_info_list$snp_info_df,
                                                overlap_mat = overlap_mat)
 
-        if (output_file  != F) { # if output_file == F, do not write down file
-                write.csv0 (snp_info_addPeak_df, output_file)
+        if (output_file != F) { # if output_file == F, do not write down file
+                if (grepl("\\.tsv$", output_file, ignore.case = TRUE)) {
+                        write.tsv0(snp_info_addPeak_df, output_file)
+                } else {
+                        write.csv0(snp_info_addPeak_df, output_file)
+                }
         }
         cat("peak information added ... \n")
         return (list(snp_info_addPeak_df = snp_info_addPeak_df, output_file = output_file))
