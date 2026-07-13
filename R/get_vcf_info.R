@@ -16,11 +16,7 @@
 # # 3. add overlapping info to original snp table
 
 # 0. load packages ------------------------------------------------------------------------------------------------
-
-load_packages_2.3 = function(){
-        packages = c('dplyr', 'VariantAnnotation','GenomicRanges', 'Biostrings')
-        load = lapply(packages, require, character.only = T)
-}
+# [deprecated]
 
 
 # toolbox: get short names
@@ -32,55 +28,64 @@ get_short_fileName = function(fileName_fullPath) {
 
 # 1. generate output file name ------------------------------------------------------------------------------------
 
+
 gen_output_file_vcfInfo = function(snp_info_file, output_dir = "./", sample_name = "") {
-        # Aim: to get output file name
-        snp_info_vec = strsplit(snp_info_file, "/")[[1]]
-        snp_batch_id = gsub(".csv", "", snp_info_vec[length(snp_info_vec)])
-        output_file = paste0(output_dir, "/", snp_batch_id, "_", sample_name, "_genotypeInfo.csv")
+        snp_batch_id = gsub("\\.[^.]*$", "", basename(snp_info_file))
+        sample_text = ifelse(sample_name == "", "", paste0("_", sample_name))
+        if (grepl("\\.tsv$", snp_info_file, ignore.case = T)) {
+                output_file = paste0(output_dir, "/", snp_batch_id, sample_text, "_genotypeInfo.tsv")
+        } else {
+                output_file = paste0(output_dir, "/", snp_batch_id, sample_text, "_genotypeInfo.csv")
+        }
 
-        return (output_file)
-
+        return(output_file)
 }
 
 
 # 2. read vcf files into a list -----------------------------------------------------------------------------------
 
-gen_vcf_list = function(vcf_dir = NA, vcf_file = NA, snp_info_gr) {
-# Aim: to generate vcf list by reading vcf files
-# Input: 1. vcf dir; 2. snp_info_gr
-# Output: vcf list
 
+gen_vcf_list = function(vcf_dir = NA, vcf_file = NA, snp_info_gr) {
         if (!is.na(vcf_dir)) {
-                vcf_files = list.files(vcf_dir, ".vcf$", full.names=T)
-                vcf_files_short = list.files(vcf_dir, ".vcf$", full.names=F)
+                vcf_files = list.files(
+                        vcf_dir,
+                        pattern = "\\.vcf(\\.gz)?$",
+                        full.names = T
+                )
+                vcf_files_short = list.files(
+                        vcf_dir,
+                        pattern = "\\.vcf(\\.gz)?$",
+                        full.names = F
+                )
         }
         if (!is.na(vcf_file)) {
                 vcf_files = vcf_file
                 vcf_files_short = get_short_fileName(vcf_file)
         }
-
-        vcf_list = replicate(length(vcf_files), list())
-        snp_param = ScanVcfParam(which= snp_info_gr)
-
-        # read vcf files
-        for (i in 1:length(vcf_files)) {
-                cat("reading", vcf_files[i], "\n")
-                # read vcf files
-                vcf_obj_i = read_vcfFile(vcf_files[i], snp_param)
-                vcf_list[[i]] = vcf_obj_i
+        if (!exists("vcf_files") || length(vcf_files) == 0) {
+                stop("[ERROR] No .vcf or .vcf.gz files found")
         }
-
+        vcf_list = vector("list", length(vcf_files))
+        snp_param = VariantAnnotation::ScanVcfParam(which = snp_info_gr)
+        for (i in seq_along(vcf_files)) {
+                cat("reading", vcf_files[i], "\n")
+                vcf_list[[i]] = read_vcfFile(vcf_files[i], snp_param)
+        }
         names(vcf_list) = vcf_files_short
-
-        return (vcf_list)
+        return(vcf_list)
 }
 
-# helper function
-read_vcfFile = function(vcf_file, param){
-        compressVcf <- bgzip(vcf_file, tempfile())
-        idx <- indexTabix(compressVcf, "vcf")
-        tab <- TabixFile(compressVcf, idx)
-        vcf <- readVcf(tab, "hg19", param)
+
+read_vcfFile = function(vcf_file, param) {
+        if (grepl("\\.vcf\\.gz$", vcf_file, ignore.case = T)) {
+                compressVcf = vcf_file
+        } else {
+                compressVcf = Rsamtools::bgzip(vcf_file, tempfile())
+        }
+        idx = Rsamtools::indexTabix(compressVcf, "vcf")
+        tab = Rsamtools::TabixFile(compressVcf, idx)
+        vcf = VariantAnnotation::readVcf(tab, "hg19", param)
+        return(vcf)
 }
 
 
@@ -134,7 +139,7 @@ get_vcf_software = function(vcf_fileName) {
 sel_hetSnps_vcf = function(vcf_data){
 # Aim: to select heterozygous SNPs from vcf data
 
-        genotype = geno(vcf_data)$GT
+        genotype = VariantAnnotation::geno(vcf_data)$GT
         vcf_data_het = vcf_data[genotype[,1] == "0/1"]
 
         return(vcf_data_het)
@@ -162,7 +167,8 @@ process_vcf_data = function(vcf_data, vcf_software = "GATK") {
         names(vcf_data_gr) = 1:length(vcf_data_gr)
         # vcf_data_df = as.data.frame(vcf_data_gr) # This might not work in R package. Don't know why
         vcf_data_df = data.frame(seqnames = vcf_data_gr@seqnames, vcf_data_gr@ranges, vcf_data_gr@elementMetadata)
-        vcf_data_df = dplyr::mutate(vcf_data_df, ref_count = ref_count_vec, alt_count = alt_count_vec)
+        vcf_data_df$ref_count = ref_count_vec
+        vcf_data_df$alt_count = alt_count_vec
 
         # modify the data format (from DNAString to character)
         vcf_data_df$ALT = sapply(vcf_data_df$ALT, function(x) as.character(unlist(x)))
@@ -176,7 +182,7 @@ extract_allelic_dist = function(vcf_data, vcf_software = "GATK"){
 # Aim: to extract allelic distribution in vcf file generated by various softwares
 
         if (vcf_software == "GATK") {
-                AD = geno(vcf_data)$AD
+                AD = VariantAnnotation::geno(vcf_data)$AD
                 AD_1 = gsub("c\\(","",paste(AD))
                 AD_2 = gsub("\\)","", AD_1)
                 AD_3 = gsub(":",", ",AD_2)
@@ -185,13 +191,13 @@ extract_allelic_dist = function(vcf_data, vcf_software = "GATK"){
         }
 
         if (vcf_software == "Samtools") {
-                DP4 = info(vcf_data)$DP4
+                DP4 = VariantAnnotation::info(vcf_data)$DP4
                 AD = sapply(DP4, function(x) paste0(x[1] + x[2], ",", x[3] + x[4]))
                 return(AD)
         }
 
         if (vcf_software == "BisSNP") {
-                DP4 = geno(vcf_data)$DP4[ , , c(1,2,3,4)]
+                DP4 = VariantAnnotation::geno(vcf_data)$DP4[, , c(1, 2, 3, 4)]
                 AD = apply(DP4, 1, function(x){paste0(x[1]+x[2],',',x[3]+x[4])})
                 return(AD)
         }
@@ -222,10 +228,17 @@ add_vcf_info = function(snp_info_df, vcf_df_list) {
 
 # main function ---------------------------------------------------------------------------------------------------
 
-get_vcf_info_main = function(snp_info_file, vcf_dir = NA, vcf_file = NA, output_dir = "./", sample_name = "", output_file = NA) {
+get_vcf_info_main = function(
+        snp_info_file,
+        vcf_dir = NA,
+        vcf_file = NA,
+        output_dir = "./",
+        sample_name = "",
+        output_file = NA,
+        chromosome_annotation = "chr"
+) {
 
         # 0. load packages
-        load_packages_2.3()
         cat("get vcf information for SNPs ... \n")
 
         # 0. generate output file name
@@ -236,7 +249,10 @@ get_vcf_info_main = function(snp_info_file, vcf_dir = NA, vcf_file = NA, output_
         }
         cat("    output file name:", output_file, '\n')
         # 1. read snp file into data frame
-        snp_info_list = read_inputSNP_file(snp_info_file)
+        snp_info_list = read_inputSNP_file(
+                snp_info_file = snp_info_file,
+                chromosome_annotation = chromosome_annotation
+        )
 
         # 2. read vcf file into a list
         vcf_list = gen_vcf_list(vcf_dir = vcf_dir,
@@ -250,8 +266,12 @@ get_vcf_info_main = function(snp_info_file, vcf_dir = NA, vcf_file = NA, output_
         snp_info_addVcf_df = add_vcf_info (snp_info_df = snp_info_list$snp_info_df,
                                            vcf_df_list = vcf_df_list)
 
-        if (output_file  != F) { # if output_file == F, do not write down file
-                write.csv0(snp_info_addVcf_df, output_file)
+        if (!identical(output_file, F)) {
+                if (grepl("\\.tsv$", output_file, ignore.case = T)) {
+                        write.tsv0(snp_info_addVcf_df, output_file)
+                } else {
+                        write.csv0(snp_info_addVcf_df, output_file)
+                }
         }
 
         cat("vcf information added ... \n")

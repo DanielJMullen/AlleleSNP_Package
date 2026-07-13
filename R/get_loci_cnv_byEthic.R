@@ -2,24 +2,31 @@
 # 1. prepare SNP files --------------------------------------------------------------------------------------------
 
 # 1-1 prepare SNP files for cnv inference
-prepare_files_for_cnvInfer = function(index_snp_file, r2_cutoff = 0.5, sample_ethic = "EUR",
-                                      output_dir = "./", sample_name = "",
-                                      vcf_file = "data/samples/DDBJ_A549/vcf_files/A549_snv.GATK.formatcor.vcf") {
-        # Aim: to generate wgs info added snp file
+prepare_files_for_cnvInfer = function(
+        index_snp_file, r2_cutoff = 0.5, sample_ethic = "EUR",
+        output_dir = "./", sample_name = "",
+        vcf_file = "data/samples/DDBJ_A549/vcf_files/A549_snv.GATK.formatcor.vcf",
+        chromosome_annotation = "chr"
+) {
         # 1. generate ld snp info df from index snp file
         # 2. add wgs info
         # Input: 1. index snp file ; 2. the ethnicity of the sample (not the SNPs)
 
+        ldsnp_info_list = get_ldsnp_info(
+                index_snp_file = index_snp_file,
+                population = sample_ethic,
+                output_dir = output_dir,
+                r2_cutoff = r2_cutoff,
+                for_cnv_call = T
+        )
 
-        ldsnp_info_list = get_ldsnp_info_main(index_snp_file = index_snp_file,
-                                              population = sample_ethic,
-                                              output_dir = output_dir,
-                                              r2_cutoff = r2_cutoff,
-                                              for_cnv_call = T)
-        ldsnp_info_addVcf_list = get_vcf_info_main(snp_info_file = ldsnp_info_list$output_file,
-                                                   vcf_file = vcf_file,
-                                                   output_dir = output_dir,
-                                                   sample_name = sample_name)
+        ldsnp_info_addVcf_list = get_vcf_info_main(
+                snp_info_file = ldsnp_info_list$output_file,
+                vcf_file = vcf_file,
+                output_dir = output_dir,
+                sample_name = sample_name,
+                chromosome_annotation = chromosome_annotation
+        )
 
         return (ldsnp_info_addVcf_list$snp_info_addVcf_df)
 
@@ -31,7 +38,7 @@ add_locus_info = function(snp_info_addVcf_df) {
 
         # generate {indexSNP object} for each index SNPs
         index_snps = unique(as.character(snp_info_addVcf_df$query_snp))
-        snp_list = replicate(length(index_snps), list())
+        snp_list = vector("list", length(index_snps))
         names(snp_list) = index_snps
 
         for (i in 1:length(index_snps)) {
@@ -85,10 +92,10 @@ mod_vcf_info = function(snp_info_addVcf_df) {
 
         # 2. sort df by query snp / locus
         if ("locus" %in% names(snp_info_addVcf_df)) {
-                snp_info_addVcf_df = arrange(snp_info_addVcf_df, locus)
+                snp_info_addVcf_df = dplyr::arrange(snp_info_addVcf_df, locus)
                 D_prime_sign = as.numeric(as.character(snp_info_addVcf_df$D.)) * snp_info_addVcf_df$locus_D > 0
         } else {
-                snp_info_addVcf_df = arrange(snp_info_addVcf_df, query_snp)
+                snp_info_addVcf_df = dplyr::arrange(snp_info_addVcf_df, query_snp)
                 D_prime_sign = as.numeric(as.character(snp_info_addVcf_df$D.)) > 0
         }
 
@@ -114,16 +121,20 @@ get_het_locus_summary_df = function(snp_info_addVcf_df, sample_ethic = "EUR", r2
         snp_info_addVcf_df_narm = snp_info_addVcf_df[complete.cases(snp_info_addVcf_df) &
                                                              snp_info_addVcf_df$r2 >= r2_cutoff, ]
         snp_info_addVcf_df_narm_mk = mark_close_snp(snp_info_addVcf_df_narm, distance_threshold = distance_threshold)
-        snp_info_addVcf_df_narm_rm_close_snp = filter(snp_info_addVcf_df_narm_mk, for_cnv_calculation == "Y")
-        het_snp_summary_df_locus = snp_info_addVcf_df_narm_rm_close_snp %>% group_by(locus) %>%
-                summarise(sum(allele_1_count), sum(allele_2_count))
-        colnames(het_snp_summary_df_locus) = c("locus", "sum_allele_1_count", "sum_allele_2_count")
+        snp_info_addVcf_df_narm_rm_close_snp = dplyr::filter(snp_info_addVcf_df_narm_mk, for_cnv_calculation == "Y")
+        het_snp_summary_df_locus = dplyr::summarise(
+                dplyr::group_by(snp_info_addVcf_df_narm_rm_close_snp, locus),
+                sum_allele_1_count = sum(allele_1_count),
+                sum_allele_2_count = sum(allele_2_count),
+                .groups = "drop"
+        )
         # filter low count het SNPs
         sel_high_count_locus = table(snp_info_addVcf_df_narm_rm_close_snp$locus) > min_ldsnp_num # an input_SNP must have >= 3 het SNPs in LD
         sel_locus = names(table(snp_info_addVcf_df_narm_rm_close_snp$locus)[sel_high_count_locus])
-        het_snp_summary_df_locus = filter(het_snp_summary_df_locus,
-                                    sum_allele_1_count + sum_allele_2_count > read_count_cutoff &
-                                            locus %in% sel_locus)
+        het_snp_summary_df_locus = dplyr::filter(
+                het_snp_summary_df_locus,
+                sum_allele_1_count + sum_allele_2_count > read_count_cutoff & locus %in% sel_locus
+        )
 
         # add SNPs in the same locus
         het_snp_summary_df = add_locus_snp(het_snp_summary_df_locus, index_snp_info_df)
@@ -172,32 +183,40 @@ add_locus_snp = function(het_snp_summary_df_locus, index_snp_info_df) {
 
 # get CNV info ---------------------------------------------------------------------------------------------------
 
-get_loci_cnv_byEthic = function(index_snp_file, cnv_param_list,
-                                sample_name = "", sample_ethic = "EUR", output_dir = "./") {
+get_loci_cnv_byEthic = function(
+        index_snp_file, cnv_param_list,
+        sample_name = "", sample_ethic = "EUR",
+        output_dir = "./", chromosome_annotation = "chr"
+) {
 # Aim: to get loci cnv information of a particular ethic group
 # Input: index snp file, vcf file, ethic
 # Output: het_snp_summary_df_ethic (summarized info of loci cnv based on a particular ethic group)
 
         # 1. process snp data
         ## 1) get ld snp table; 2) add vcf information
-        snp_info_addVcf_df_raw = prepare_files_for_cnvInfer(index_snp_file = index_snp_file,
-                                                            r2_cutoff = cnv_param_list$r2_cutoff,
-                                                            sample_name = sample_name,
-                                                            sample_ethic = sample_ethic,
-                                                            output_dir = output_dir,
-                                                            vcf_file = cnv_param_list$vcf_file)
+        snp_info_addVcf_df_raw = prepare_files_for_cnvInfer(
+                index_snp_file = index_snp_file,
+                r2_cutoff = cnv_param_list$r2_cutoff,
+                sample_name = sample_name,
+                sample_ethic = sample_ethic,
+                output_dir = output_dir,
+                vcf_file = cnv_param_list$vcf_file_for_cnv,
+                chromosome_annotation = chromosome_annotation
+        )
         ## modify vcf information for further analysis
         snp_info_addVcf_list = add_locus_info(snp_info_addVcf_df_raw)
         snp_info_addVcf_df = mod_vcf_info(snp_info_addVcf_list$snp_info_addVcf_df)
 
         # 2. get loci cnv by calculating summing up r2 SNP distribution
-        het_snp_summary_df_r2 = get_het_locus_summary_df(snp_info_addVcf_df = snp_info_addVcf_df,
-                                                         sample_ethic = sample_ethic,
-                                                         r2_cutoff = cnv_param_list$r2_cutoff,
-                                                         distance_threshold = cnv_param_list$distance_threshold,
-                                                         min_ldsnp_num = cnv_param_list$min_ldsnp_num,
-                                                         read_count_cutoff = cnv_param_list$read_count_cutoff,
-                                                         index_snp_info_df = snp_info_addVcf_list$index_snp_info_df)
+        het_snp_summary_df_r2 = get_het_locus_summary_df(
+                snp_info_addVcf_df = snp_info_addVcf_df,
+                sample_ethic = sample_ethic,
+                r2_cutoff = cnv_param_list$r2_cutoff,
+                distance_threshold = cnv_param_list$distance_threshold,
+                min_ldsnp_num = cnv_param_list$min_ldsnp_num,
+                read_count_cutoff = cnv_param_list$read_count_cutoff,
+                index_snp_info_df = snp_info_addVcf_list$index_snp_info_df
+        )
 
         return(het_snp_summary_df_r2)
 

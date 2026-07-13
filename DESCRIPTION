@@ -7,3 +7,11 @@ Maintainer: Chenchen Yang <yang529@usc.edu>
 Description: Identify allele-specific effects of SNPs through investigating sequencing data from both online ENCODE database and local files.
 License: GPL-3
 LazyData: TRUE
+Imports:
+    httr,
+    dplyr,
+    GenomicRanges,
+    IRanges,
+    Rsamtools,
+    rtracklayer,
+    VariantAnnotation

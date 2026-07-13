@@ -46,9 +46,13 @@ infer_genotype_from_reads = function(snp_info_alleleDist_df, het_threshold, geno
 
         # get genotype by sample
         snp_info_alleleDist_df_sel2 = dplyr::select(snp_info_alleleDist_df, rsID, ref, alt)
-        snp_info_alleleDist_df_summ =
-                snp_info_alleleDist_df_sel2 %>% group_by(rsID) %>% summarise(ref = sum(ref), alt = sum(alt))
-        snp_info_alleleDist_df_summ_sel = dplyr::select(snp_info_alleleDist_df_summ, ref, alt)
+        snp_info_alleleDist_df_summ = dplyr::summarise(
+                dplyr::group_by(snp_info_alleleDist_df_sel2, rsID),
+                ref = sum(ref),
+                alt = sum(alt),
+                .groups = "drop"
+        )
+        # remove(?): snp_info_alleleDist_df_summ_sel = dplyr::select(snp_info_alleleDist_df_summ, ref, alt)
         ## infer genotype by sample
         if (genotype_by_sample) {
                 genotype_sample = apply(snp_info_alleleDist_df_summ[, c("ref", "alt")], 1, function(x) {
@@ -108,7 +112,7 @@ add_vcf_res = function(snp_info_alleleDist_df, snp_info_vcf_file) {
         # head(snp_info_vcf_df)
 
         # add vcf info
-        snp_info_vcf_df_sel = snp_info_vcf_df[, grepl(".vcf$", names(snp_info_vcf_df))]
+        snp_info_vcf_df_sel = snp_info_vcf_df[, grepl("\\.vcf$", names(snp_info_vcf_df)), drop = F]
         snp_info_vcf_df_sel$genotype_vcf = apply(snp_info_vcf_df_sel, 1, function(x) any(x, na.rm = T))
 
         sel_vcf_cols = snp_info_vcf_df_sel[as.character(snp_info_alleleDist_df$rsID), "genotype_vcf"]
@@ -223,7 +227,11 @@ add_cnv_res_encode = function(snp_info_alleleDist_df, snp_info_cnv_file) {
 calculate_ase = function(snp_info_alleleDist_df, depth_threshold){
 
         # filter snps
-        snp_info_alleleDist_df = filter(snp_info_alleleDist_df, genotype_final, ref + alt > depth_threshold)
+        snp_info_alleleDist_df = dplyr::filter(
+                snp_info_alleleDist_df,
+                genotype_final,
+                ref + alt > depth_threshold
+        )
         if (nrow(snp_info_alleleDist_df) == 0) {
                 cat("No allele-specific effects are identified.\n")
                 return ()
@@ -243,14 +251,18 @@ calculate_ase = function(snp_info_alleleDist_df, depth_threshold){
         snp_info_alleleDist_df$p.val.cnv.bh = p.val.cnv.bh
         snp_info_alleleDist_df$p.val.cnv.bonf = p.val.cnv.bonf
 
-        snp_info_alleleDist_df = arrange(snp_info_alleleDist_df, p.val.cnv)
+        snp_info_alleleDist_df = dplyr::arrange(snp_info_alleleDist_df, p.val.cnv)
 
         return (snp_info_alleleDist_df)
 }
 
 # 5.2 for encode database only
 calculate_ase_encode = function(snp_info_alleleDist_df, depth_threshold) {
-        snp_info_alleleDist_df = filter(snp_info_alleleDist_df, genotype_final, ref + alt > depth_threshold)
+        snp_info_alleleDist_df = dplyr::filter(
+                snp_info_alleleDist_df,
+                genotype_final,
+                ref + alt > depth_threshold
+        )
         if (nrow(snp_info_alleleDist_df) == 0) {
                 cat("No allele-specific effects are identified.\n")
                 return ()
@@ -310,7 +322,6 @@ get_ase_snp_main = function(snp_info_alleleDist_file,
                             ) {
 
 
-        require("dplyr")
         cat("calculate allele-specific effects for SNPs ... \n")
 
         if (is.na(output_file)) {
@@ -353,7 +364,7 @@ get_ase_snp_main = function(snp_info_alleleDist_file,
                                                        depth_threshold = depth_threshold)
         }
 
-        if (output_file != F) { # if output_file == F, do not write down file
+        if (!identical(output_file, F)) { # if output_file == F, do not write down file
                 if (grepl("\\.tsv$", output_file, ignore.case = TRUE)) {
                         write.tsv0(snp_info_alleleDist_df, output_file)
                 } else {

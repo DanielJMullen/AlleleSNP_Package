@@ -1,13 +1,16 @@
 # T1 toolbox
 
+
 # toolbox: write.csv with no row names
 write.csv0 = function(...) {
         return(write.csv(..., row.names = F))
 }
 
+
 write.tsv0 = function(df, file) {
         write.table(df, file, sep = "\t", quote = F, row.names = F)
 }
+
 
 # toolbox: get # of lines of code
 get_code_lines_counts = function() {
@@ -20,5 +23,3 @@ get_code_lines_counts = function() {
         }
         cat ("Altogether", line_count, "lines of code.")
 }
-
-# get_code_lines_counts()

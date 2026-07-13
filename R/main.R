@@ -10,29 +10,32 @@
 
 # main function ---------------------------------------------------------------------------------------------
 
-get_assnp = function(index_snp_file = NA,
-                     snp_info_file = NA,
-                     sample_name = "DDBJ_A549",
-                     bam_dir = NA,
-                     merge_replicates = T,
-                     peak_dir = NA,
-                     vcf_dir = NA,
-                     vcf_file_for_cnv = NA,
-                     sample_ethic = "EUR",
-                     het_threshold = 0.1,
-                     depth_threshold = 20,
-                     base_qual_threshold = 20,
-                     mapq_threshold = 20,
-                     genotype_by_sample = T,
-                     r2_cutoff = 0.5,
-                     distance_threshold = 100,
-                     min_ldsnp_num = 1,
-                     read_count_cutoff = 100,
-                     use_encode_cnv = F,
-                     output_dir = NA,
-                     output_file = NA,
-                     chromosome_annotation = "chr",
-                     ...) {
+
+get_assnp = function(
+        index_snp_file = NA,
+        snp_info_file = NA,
+        sample_name = "DDBJ_A549",
+        bam_dir = NA,
+        merge_replicates = T,
+        peak_dir = NA,
+        vcf_dir = NA,
+        vcf_file_for_cnv = NA,
+        sample_ethic = "EUR",
+        het_threshold = 0.1,
+        depth_threshold = 20,
+        base_qual_threshold = 20,
+        mapq_threshold = 20,
+        genotype_by_sample = T,
+        r2_cutoff = 0.5,
+        distance_threshold = 100,
+        min_ldsnp_num = 1,
+        read_count_cutoff = 100,
+        use_encode_cnv = F,
+        output_dir = NA,
+        output_file = NA,
+        chromosome_annotation = "chr",
+        ...
+) {
 
         # 0. make a directory for data storage
         if (is.na(output_dir)) {
@@ -56,8 +59,11 @@ get_assnp = function(index_snp_file = NA,
 
         # 1. get ld snp file
         if (!is.na(index_snp_file)) {
-                snp_info_list = get_ldsnp_info_main(index_snp_file = index_snp_file,
-                                                    output_dir = output_dir)
+                snp_info_list = get_ldsnp_info(
+                        index_snp_file = index_snp_file,
+                        r2_cutoff = r2_cutoff,
+                        output_dir = output_dir
+                )
                 snp_info_file = snp_info_list$output_file
         }
 
@@ -66,23 +72,28 @@ get_assnp = function(index_snp_file = NA,
         }
 
         # 2. get allele distribution
-        snp_info_alleleDist_list = get_alleleDist_info_main(snp_info_file = snp_info_file,
-                                                            bam_dir = bam_dir,
-                                                            output_dir = output_dir,
-                                                            sample_name = sample_name,
-                                                            output_file = output_file,
-                                                            base_qual_threshold = base_qual_threshold,
-                                                            mapq_threshold = mapq_threshold,
-                                                            merge_replicates = merge_replicates,
-                                                            chromosome_annotation = chromosome_annotation, ...)
+        snp_info_alleleDist_list = get_alleleDist_info_main(
+                snp_info_file = snp_info_file,
+                bam_dir = bam_dir,
+                output_dir = output_dir,
+                sample_name = sample_name,
+                output_file = output_file,
+                base_qual_threshold = base_qual_threshold,
+                mapq_threshold = mapq_threshold,
+                merge_replicates = merge_replicates,
+                chromosome_annotation = chromosome_annotation,
+                ...
+        )
 
         # 3. get peak annotation
         if (!is.na(peak_dir)) {
-                snp_info_addPeak_list = get_peak_info_main(snp_info_file = snp_info_file,
-                                                           peak_dir = peak_dir,
-                                                           output_dir = output_dir,
-                                                           sample_name = sample_name,
-                                                           chromosome_annotation = chromosome_annotation)
+                snp_info_addPeak_list = get_peak_info_main(
+                        snp_info_file = snp_info_file,
+                        peak_dir = peak_dir,
+                        output_dir = output_dir,
+                        sample_name = sample_name,
+                        chromosome_annotation = chromosome_annotation
+                )
         } else {
                 snp_info_addPeak_list = list()
                 snp_info_addPeak_list$output_file = NA
@@ -90,10 +101,13 @@ get_assnp = function(index_snp_file = NA,
 
         # 4. get vcf annotation
         if (!is.na(vcf_dir)) {
-                snp_info_addVcf_list = get_vcf_info_main(snp_info_file = snp_info_file,
-                                                         vcf_dir = vcf_dir,
-                                                         output_dir = output_dir,
-                                                         sample_name = sample_name)
+                snp_info_addVcf_list = get_vcf_info_main(
+                        snp_info_file = snp_info_file,
+                        vcf_dir = vcf_dir,
+                        output_dir = output_dir,
+                        sample_name = sample_name,
+                        chromosome_annotation = chromosome_annotation
+                )
         } else {
                 snp_info_addVcf_list = list()
                 snp_info_addVcf_list$output_file = NA
@@ -101,37 +115,44 @@ get_assnp = function(index_snp_file = NA,
 
         # 5. get cnv annotation
         if (use_encode_cnv) {
-                ## use encode cnv
-                snp_info_addCnv_list = get_encodeCnv_info_main(snp_info_file = snp_info_file,
-                                                                output_dir = output_dir,
-                                                                sample_name = sample_name)
+                # use encode cnv
+                snp_info_addCnv_list = get_encodeCnv_info_main(
+                        snp_info_file = snp_info_file,
+                        output_dir = output_dir,
+                        sample_name = sample_name,
+                        chromosome_annotation = chromosome_annotation
+                )
         } else if (!is.na(index_snp_file) && !is.na(vcf_file_for_cnv)) {
-                ## if have index snp and vcf_file_for_cnv (wgs vcf data file)
-                snp_info_addCnv_list = get_cnv_info_main(index_snp_file = index_snp_file,
-                                                         snp_info_file = snp_info_file,
-                                                         output_dir = output_dir,
-                                                         vcf_file_for_cnv = vcf_file_for_cnv,
-                                                         sample_name = sample_name,
-                                                         sample_ethic = sample_ethic,
-                                                         r2_cutoff = r2_cutoff,
-                                                         distance_threshold = distance_threshold,
-                                                         min_ldsnp_num = min_ldsnp_num,
-                                                         read_count_cutoff = read_count_cutoff)
+                # if have index snp and vcf_file_for_cnv (wgs vcf data file)
+                snp_info_addCnv_list = get_cnv_info_main(
+                        index_snp_file = index_snp_file,
+                        snp_info_file = snp_info_file,
+                        output_dir = output_dir,
+                        vcf_file_for_cnv = vcf_file_for_cnv,
+                        sample_name = sample_name,
+                        sample_ethic = sample_ethic,
+                        r2_cutoff = r2_cutoff,
+                        distance_threshold = distance_threshold,
+                        min_ldsnp_num = min_ldsnp_num,
+                        read_count_cutoff = read_count_cutoff,
+                        chromosome_annotation = chromosome_annotation
+                )
         } else {
                 snp_info_addCnv_list = list()
                 snp_info_addCnv_list$output_file = NA
         }
 
         # 6. calculate ase-snps
-        get_ase_snp_main(snp_info_alleleDist_file = snp_info_alleleDist_list$output_file,
-                         snp_info_peak_file = snp_info_addPeak_list$output_file,
-                         snp_info_vcf_file = snp_info_addVcf_list$output_file,
-                         snp_info_cnv_file = snp_info_addCnv_list$output_file,
-                         het_threshold = het_threshold,
-                         depth_threshold = depth_threshold,
-                         output_dir = output_dir,
-                         genotype_by_sample = genotype_by_sample,
-                         use_encode_cnv = use_encode_cnv)
-
+        get_ase_snp_main(
+                snp_info_alleleDist_file = snp_info_alleleDist_list$output_file,
+                snp_info_peak_file = snp_info_addPeak_list$output_file,
+                snp_info_vcf_file = snp_info_addVcf_list$output_file,
+                snp_info_cnv_file = snp_info_addCnv_list$output_file,
+                het_threshold = het_threshold,
+                depth_threshold = depth_threshold,
+                output_dir = output_dir,
+                genotype_by_sample = genotype_by_sample,
+                use_encode_cnv = use_encode_cnv
+        )
 }
 

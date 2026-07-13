@@ -17,12 +17,7 @@ ascii_to_quality_score = function(x) {
 # functions -------------------------------------------------------------------------------------------------------
 
 # step 0-1: load packages -----------------------------------------------------------------------------------------
-
-load_packages_2.1 = function(){
-        packages = c('Rsamtools', "BSgenome.Hsapiens.UCSC.hg19", "dplyr")
-        load = lapply(packages, require, character.only = T)
-}
-
+# [deprecated]
 
 # step 0-2: function: generate parameter list ---------------------------------------------------------------------
 
@@ -88,7 +83,7 @@ read_inputSNP_file = function(snp_info_file, chromosome_annotation = "chr") {
                 snp_info_df <- snp_info_file
         }
         head(snp_info_df)
-        snp_info_df = arrange(snp_info_df, as.numeric(gsub("chr", "", chr)), pos)
+        snp_info_df = dplyr::arrange(snp_info_df, as.numeric(gsub("chr", "", chr)), pos)
         snp_id = as.character(snp_info_df$rsID)
         snp_ref = as.character(snp_info_df$ref)
         snp_alt = as.character(snp_info_df$alt)
@@ -102,7 +97,10 @@ read_inputSNP_file = function(snp_info_file, chromosome_annotation = "chr") {
                 stop("requires chromosome annotation: ['chr'|'no_chr']")
         }
         snp_pos = as.numeric(as.character(snp_info_df$pos))
-        which = GRanges(seqnames = snp_chr, ranges = IRanges(start = snp_pos,end = snp_pos))
+        which = GenomicRanges::GRanges(
+                seqnames = snp_chr,
+                ranges = IRanges::IRanges(start = snp_pos, end = snp_pos)
+        )
         names(which) = snp_id
         snp_info_gr = which
 
@@ -159,7 +157,7 @@ read_bam_files = function(snp_info_gr, param_list) {
         ## get the param
         what = c("qname", "flag","rname","pos", "mapq", "cigar","seq", "qual","strand", "qwidth")
         tag = c("NM", "RG","MD")
-        param = ScanBamParam(which = snp_info_gr, what = what, tag = tag) # this function will reorder the snps comparing to haploreg files
+        param = Rsamtools::ScanBamParam(which = snp_info_gr, what = what, tag = tag) # this function will reorder the snps comparing to haploreg files
 
         ## scan bam files
         bam_super_list = replicate(length(bam_files), list())
@@ -168,7 +166,7 @@ read_bam_files = function(snp_info_gr, param_list) {
                 file = bam_files[i]
                 cat("reading", file , '\n')
                 bam_file_link = paste0(dir_bam, "/", file)
-                bam_super_list[[i]] = scanBam(bam_file_link, param = param)
+                bam_super_list[[i]] = Rsamtools::scanBam(bam_file_link, param = param)
                 gc()
         }
 
@@ -480,14 +478,17 @@ gen_allele_distribution_table = function(bam_list){
 # 3-6 function: merge replicates ----------------------------------------------------------------------------------
 
 merge_replicates_table = function(ad_table) {
-# Aim: to merge replicates
         ad_table$biofeature = sapply(ad_table$biofeature, function(x) {
                 gsub("[Rr][Ee][Pp][1-9]", replacement = "", x)
         })
-        ad_table_summ = ad_table %>% group_by(rsID, biofeature) %>%
-                summarise(ref = sum(ref), alt = sum(alt),
-                          ref_rmdup = sum(ref_rmdup), alt_rmdup = sum(alt_rmdup))
-
+        ad_table_summ = dplyr::summarise(
+                dplyr::group_by(ad_table, rsID, biofeature),
+                ref = sum(ref),
+                alt = sum(alt),
+                ref_rmdup = sum(ref_rmdup),
+                alt_rmdup = sum(alt_rmdup),
+                .groups = "drop"
+        )
         return(ad_table_summ)
 }
 
@@ -511,7 +512,6 @@ get_alleleDist_info_main = function(
 ) {
 
         ### -------------------- step 0-1: load the packages -------------------- ###
-        load_packages_2.1()
         cat("get bam information for SNPs ... \n")
 
         ### ------------------ step 0-2: generate parmater list ------------------- ###
@@ -587,11 +587,11 @@ get_alleleDist_info_main = function(
                 ad_table = rbind(ad_table, ad_table_i)
         }
 
-        if (merge_replicates & nrow(ad_table) > 0) {
+        if (merge_replicates && nrow(ad_table) > 0) {
                 ad_table = merge_replicates_table(ad_table)
         }
 
-        ad_table = filter(ad_table, !(ref == 0 & alt == 0))
+        ad_table = dplyr::filter(ad_table, !(ref == 0 & alt == 0))
         # write down allele-distribution table
         if (param_list$output_file != F) { # if output_file == F, do not write down file
                 if (grepl("\\.tsv$", param_list$output_file, ignore.case = TRUE)) {

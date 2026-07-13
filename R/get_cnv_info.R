@@ -16,33 +16,37 @@
 # # 3. add overlapping info to original snp table
 
 # 0-1. load packages ----------------------------------------------------------------------------------------------
-
-load_packages_2.4 = function(){
-        packages = c('dplyr', 'VariantAnnotation')
-        load = lapply(packages, require, character.only = T)
-}
+# [deprecated]
 
 
 # 1. some helper functions ----------------------------------------------------------------------------------------
-# generate output file name
-gen_output_file_cnvInfo = function(snp_info_file, output_dir, sample_name) {
-        # Aim: to get output file name
-        snp_info_vec = strsplit(snp_info_file, "/")[[1]]
-        snp_batch_id = gsub(".csv", "", snp_info_vec[length(snp_info_vec)])
-        output_file = paste0(output_dir, "/", snp_batch_id, "_", sample_name, "_cnvInfo.csv")
 
-        return (output_file)
+
+# generate output file name
+gen_output_file_cnvInfo = function(snp_info_file, output_dir = "./", sample_name = "") {
+        snp_batch_id = gsub("\\.[^.]*$", "", basename(snp_info_file))
+        sample_text = ifelse(sample_name == "", "", paste0("_", sample_name))
+        if (grepl("\\.tsv$", snp_info_file, ignore.case = T)) {
+                output_file = paste0(output_dir, "/", snp_batch_id, sample_text, "_cnvInfo.tsv")
+        } else {
+                output_file = paste0(output_dir, "/", snp_batch_id, sample_text, "_cnvInfo.csv")
+        }
+        return(output_file)
 }
+
 
 # generate output file: het SNP summary
-gen_output_file_het_snp_summary = function(snp_info_file, output_dir, sample_name, r2) {
-        # Aim: to get output file name
-        snp_info_vec = strsplit(snp_info_file, "/")[[1]]
-        snp_batch_id = gsub(".csv", "", snp_info_vec[length(snp_info_vec)])
-        output_file = paste0(output_dir, "/Het_SNP_Summary_", snp_batch_id, "_", sample_name, "_", r2, ".csv")
-
-        return (output_file)
+gen_output_file_het_snp_summary = function(snp_info_file, output_dir = "./", sample_name = "", r2) {
+        snp_batch_id = gsub("\\.[^.]*$", "", basename(snp_info_file))
+        sample_text = ifelse(sample_name == "", "", paste0("_", sample_name))
+        if (grepl("\\.tsv$", snp_info_file, ignore.case = T)) {
+                output_file = paste0(output_dir, "/Het_SNP_Summary_", snp_batch_id, sample_text, "_", r2, ".tsv")
+        } else {
+                output_file = paste0(output_dir, "/Het_SNP_Summary_", snp_batch_id, sample_text, "_", r2, ".csv")
+        }
+        return(output_file)
 }
+
 
 # get other ethic groups
 get_other_ethic = function(ethic) {
@@ -60,7 +64,7 @@ merge_het_snp_summary_df = function (het_snp_summary_list) {
                 if (i == 1) {
                         het_snp_summary_df = het_snp_summary_list[[1]]
                 } else {
-                        to_add = filter(het_snp_summary_list[[i]], !(query_snp %in% as.character(het_snp_summary_df$query_snp)))
+                        to_add = dplyr::filter(het_snp_summary_list[[i]], !(query_snp %in% as.character(het_snp_summary_df$query_snp)))
                         het_snp_summary_df = rbind(het_snp_summary_df, to_add)
                 }
         }
@@ -75,10 +79,10 @@ add_cnv_info_riskSnp = function(snp_info_addVcf_df, het_snp_summary_df) {
 # Aim: to add cnv information to risk snp table
 
         # modify data: make r2, D., population into single string
-        r2 = as.numeric(sapply(as.character(snp_info_addVcf_df$r2), function(x) strsplit(x, ",")[[1]][1]))
-        D. = as.numeric(sapply(as.character(snp_info_addVcf_df$D.), function(x) strsplit(x, ",")[[1]][1]))
-        query_snp = sapply(as.character(snp_info_addVcf_df$query_snp), function(x) strsplit(x, ",")[[1]][1])
-        population = sapply(as.character(snp_info_addVcf_df$population), function(x) strsplit(x, ",")[[1]][1])
+        r2 = as.numeric(sapply(as.character(snp_info_addVcf_df$r2), function(x) strsplit(x, "[,|]")[[1]][1]))
+        D. = as.numeric(sapply(as.character(snp_info_addVcf_df$D.), function(x) strsplit(x, "[,|]")[[1]][1]))
+        query_snp = sapply(as.character(snp_info_addVcf_df$query_snp), function(x) strsplit(x, "[,|]")[[1]][1])
+        population = sapply(as.character(snp_info_addVcf_df$population), function(x) strsplit(x, "[,|]")[[1]][1])
 
         snp_info_addVcf_df$r2 = r2
         snp_info_addVcf_df$D. = D.
@@ -109,14 +113,25 @@ add_cnv_info_riskSnp = function(snp_info_addVcf_df, het_snp_summary_df) {
         return(snp_info_addVcf_df)
 }
 
+
 # add cnv info main -----------------------------------------------------------------------------------------------
 
-get_cnv_info_main = function(index_snp_file , snp_info_file = NA, sample_name, sample_ethic = "EUR",
-                             output_dir = "./", output_file = NA, vcf_file_for_cnv, r2_cutoff = 0.5,
-                             distance_threshold = 100, min_ldsnp_num = 1, read_count_cutoff = 1) {
 
+get_cnv_info_main = function(
+        index_snp_file,
+        snp_info_file = NA,
+        sample_name,
+        sample_ethic = "EUR",
+        output_dir = "./",
+        output_file = NA,
+        vcf_file_for_cnv,
+        r2_cutoff = 0.5,
+        distance_threshold = 100,
+        min_ldsnp_num = 1,
+        read_count_cutoff = 1,
+        chromosome_annotation = "chr"
+) {
         # 0. preparation
-        load_packages_2.4()
         cat("get cnv information for SNPs ... \n")
         cnv_param_list = list(vcf_file_for_cnv = vcf_file_for_cnv,
                               r2_cutoff = r2_cutoff,
@@ -126,27 +141,36 @@ get_cnv_info_main = function(index_snp_file , snp_info_file = NA, sample_name, s
 
         # 1. calculate cnv by loci and ethic group, and then merge them together
         ethics = c(sample_ethic, get_other_ethic(sample_ethic))
-        het_snp_summary_list = replicate(length(ethics), list())
+        het_snp_summary_list = vector("list", length(ethics))
         for (i in 1:length(ethics)) {
-                het_snp_summary_list[[i]] = get_loci_cnv_byEthic(index_snp_file = index_snp_file,
-                                                                 sample_name = sample_name,
-                                                                 sample_ethic = ethics[i],
-                                                                 output_dir = output_dir,
-                                                                 cnv_param_list = cnv_param_list)
+                het_snp_summary_list[[i]] = get_loci_cnv_byEthic(
+                        index_snp_file = index_snp_file,
+                        sample_name = sample_name,
+                        sample_ethic = ethics[i],
+                        output_dir = output_dir,
+                        cnv_param_list = cnv_param_list,
+                        chromosome_annotation = chromosome_annotation
+                )
         }
 
         het_snp_summary_df_final = merge_het_snp_summary_df(het_snp_summary_list)
 
         # 2. get and add cnv info to risk SNP info table
         if (is.na(snp_info_file)) {
-                ldsnp_info_list = get_ldsnp_info_main(index_snp_file = index_snp_file,
-                                                      output_dir = output_dir)
+                ldsnp_info_list = get_ldsnp_info(
+                        index_snp_file = index_snp_file,
+                        r2_cutoff = r2_cutoff,
+                        output_dir = output_dir
+                )
                 snp_info_file = ldsnp_info_list$output_file
         }
 
-        ldsnp_info_vcf_list = get_vcf_info_main(snp_info_file = snp_info_file,
-                                                vcf_file = vcf_file_for_cnv,
-                                                output_file = F)
+        ldsnp_info_vcf_list = get_vcf_info_main(
+                snp_info_file = snp_info_file,
+                vcf_file = vcf_file_for_cnv,
+                output_file = F,
+                chromosome_annotation = chromosome_annotation
+        )
         snp_info_addCnv_df = add_cnv_info_riskSnp(snp_info_addVcf_df = ldsnp_info_vcf_list$snp_info_addVcf_df,
                                                   het_snp_summary_df = het_snp_summary_df_final)
 
@@ -155,7 +179,11 @@ get_cnv_info_main = function(index_snp_file , snp_info_file = NA, sample_name, s
                                                                output_dir = output_dir,
                                                                sample_name = sample_name,
                                                                r2 = r2_cutoff)
-        write.csv0(het_snp_summary_df_final, het_snp_summary_file)
+        if (grepl("\\.tsv$", het_snp_summary_file, ignore.case = T)) {
+                write.tsv0(het_snp_summary_df_final, het_snp_summary_file)
+        } else {
+                write.csv0(het_snp_summary_df_final, het_snp_summary_file)
+        }
 
         if (is.na(output_file)) {
                 output_file = gen_output_file_cnvInfo(snp_info_file = snp_info_file,
@@ -164,8 +192,12 @@ get_cnv_info_main = function(index_snp_file , snp_info_file = NA, sample_name, s
         }
         cat("    output file name:", output_file, '\n')
 
-        if (output_file != F) {
-                write.csv0(snp_info_addCnv_df, output_file)
+        if (!identical(output_file, F)) {
+                if (grepl("\\.tsv$", output_file, ignore.case = T)) {
+                        write.tsv0(snp_info_addCnv_df, output_file)
+                } else {
+                        write.csv0(snp_info_addCnv_df, output_file)
+                }
         }
 
         cat("cnv information added ... \n")

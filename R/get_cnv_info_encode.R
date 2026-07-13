@@ -14,12 +14,12 @@ gen_snp_cnv_table = function(snp_info_df, snp_info_gr) {
 
         cat("Add ENCODE cnv information...\n")
         # encode_cnv_gr_list = readRDS(cnv_grList_file)
-        data("encode_cnv_gr_list")
+        utils::data("encode_cnv_gr_list", envir = environment())
         snp_cnv_table = data.frame(matrix(nrow = length(snp_info_gr), ncol = length(encode_cnv_gr_list)))
         colnames(snp_cnv_table) = names(encode_cnv_gr_list)
 
         for (i in 1:length(encode_cnv_gr_list)) {
-                overlaps_df_i = as.data.frame(findOverlaps(snp_info_gr, encode_cnv_gr_list[[i]]))
+                overlaps_df_i = as.data.frame(GenomicRanges::findOverlaps(snp_info_gr, encode_cnv_gr_list[[i]]))
                 cnv_snp_info_i = encode_cnv_gr_list[[i]][overlaps_df_i$subjectHits]$name
                 snp_cnv_table[overlaps_df_i$queryHits, i] = cnv_snp_info_i
         }
@@ -33,10 +33,19 @@ gen_snp_cnv_table = function(snp_info_df, snp_info_gr) {
 
 # main function ---------------------------------------------------------------------------------------------------
 
-get_encodeCnv_info_main = function(snp_info_file, output_dir = "./", sample_name = "", output_file = NA) {
+get_encodeCnv_info_main = function(
+        snp_info_file,
+        output_dir = "./",
+        sample_name = "",
+        output_file = NA,
+        chromosome_annotation = "chr"
+) {
 
         # 1. read snp info file
-        snp_info_list = read_inputSNP_file(snp_info_file)
+        snp_info_list = read_inputSNP_file(
+                snp_info_file = snp_info_file,
+                chromosome_annotation = chromosome_annotation
+        )
 
         # 2. generate snp-cnv table (row: snps, col: all encode cnv samples)
         snp_info_addCnv_df = gen_snp_cnv_table(snp_info_df = snp_info_list$snp_info_df,
@@ -51,8 +60,12 @@ get_encodeCnv_info_main = function(snp_info_file, output_dir = "./", sample_name
         }
         cat("    output file name:", output_file, '\n')
 
-        if (output_file != F) {
-                write.csv0(snp_info_addCnv_df, output_file)
+        if (!identical(output_file, F)) {
+                if (grepl("\\.tsv$", output_file, ignore.case = T)) {
+                        write.tsv0(snp_info_addCnv_df, output_file)
+                } else {
+                        write.csv0(snp_info_addCnv_df, output_file)
+                }
         }
         cat("cnv information added ... \n")
 
