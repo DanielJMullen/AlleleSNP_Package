@@ -20,6 +20,7 @@ get_ldsnp_info = function(
         for_cnv_call = F,
         output_dir = "./",
         output_file = NA,
+        failed_snp_file = NA,
         haploreg_url = "https://pubs.broadinstitute.org/mammals/haploreg/haploreg.php",
         haploreg_timeout = 180,
         sleep_range = c(3, 6)
@@ -40,6 +41,16 @@ get_ldsnp_info = function(
                 )
         }
         cat("[INFO] Output file:", output_file, "\n")
+        if (.is_na_scalar(failed_snp_file)) {
+                if (identical(output_file, F)) {
+                        failed_snp_file = F
+                } else {
+                        failed_snp_file = sub("\\.[^.]+$", "_haploreg_failed_snps.txt", output_file)
+                }
+        }
+        if (!identical(failed_snp_file, F)) {
+                cat("[INFO] Failed HaploReg SNP file:", failed_snp_file, "\n")
+        }
 
         # read input SNP file, normalize to 2 cols: rsID, population
         index_snp_df = .read_index_snp_file(index_snp_file = index_snp_file, population = population)
@@ -52,9 +63,14 @@ get_ldsnp_info = function(
                 if (!identical(output_file, F)) {
                         .write_ld_output(ldsnp_info_df, output_file)
                 }
+                if (!identical(failed_snp_file, F)) {
+                        .write_failed_haploreg_snps(failed_snps = character(), failed_snp_file = failed_snp_file)
+                }
                 return(list(
                         ldsnp_info_df = ldsnp_info_df,
                         output_file = output_file,
+                        failed_snp_file = failed_snp_file,
+                        failed_haploreg_snp_IDs = character(),
                         non_rsID_SNPs = non_rsID_SNPs
                 ))
         }
@@ -73,6 +89,21 @@ get_ldsnp_info = function(
                 ),
                 SIMPLIFY = F
         )
+        failed_haploreg_snp_IDs = unique(unlist(
+                lapply(seq_along(haploreg_list), function(i) {
+                        failed = isTRUE(attr(haploreg_list[[i]], "haploreg_failed"))
+                        if (failed) {
+                                index_snp_df$rsID[i]
+                        } else {
+                                character()
+                        }
+                }),
+                use.names = F
+        ))
+        failed_haploreg_snp_IDs = failed_haploreg_snp_IDs[!is.na(failed_haploreg_snp_IDs) & failed_haploreg_snp_IDs != ""]
+        if (!identical(failed_snp_file, F)) {
+                .write_failed_haploreg_snps(failed_snps = failed_haploreg_snp_IDs, failed_snp_file = failed_snp_file)
+        }
 
         if (length(haploreg_list) == 0 || all(vapply(haploreg_list, nrow, numeric(1)) == 0)) {
                 warning("[WARN] (0) LD SNPs returned by HaploReg.")
@@ -125,6 +156,8 @@ get_ldsnp_info = function(
         return(list(
                 ldsnp_info_df = ldsnp_info_df,
                 output_file = output_file,
+                failed_snp_file = failed_snp_file,
+                failed_haploreg_snp_IDs = unique(failed_haploreg_snp_IDs),
                 non_rsID_SNPs = unique(non_rsID_SNPs),
                 non_haploreg_snp_IDs = unique(non_haploreg_snp_IDs),
                 indel_or_multiple_alt_snp_IDs = unique(indel_or_multiple_alt_snp_IDs),
@@ -271,8 +304,9 @@ get_ldsnp_info = function(
         haploreg_timeout,
         sleep_range
 ) {
-        populations = unlist(strsplit(population_string, split = ","))
-        populations = populations[populations != ""]
+        populations = unlist(strsplit(as.character(population_string), split = ","))
+        populations = trimws(populations)
+        populations = populations[!is.na(populations) & populations != ""]
         snp_population_results_list = lapply(populations, function(pop_i) {
                 .get_haploreg_population(
                         snp_id = snp_id,
@@ -282,18 +316,42 @@ get_ldsnp_info = function(
                         haploreg_timeout = haploreg_timeout
                 )
         })
+        population_failures = vapply(
+                snp_population_results_list,
+                function(result_i) {isTRUE(attr(result_i, "haploreg_failed"))},
+                logical(1)
+        )
+        population_failure_reasons = vapply(
+                snp_population_results_list,
+                function(result_i) {
+                        reason = attr(result_i, "failure_reason")
+                        if (is.null(reason) || length(reason) == 0 || is.na(reason)) {
+                                ""
+                        } else {
+                                as.character(reason)
+                        }
+                },
+                character(1)
+        )
 
         if (length(snp_population_results_list) == 0 || all(vapply(snp_population_results_list, nrow, numeric(1)) == 0)) {
                 snp_results_df = .empty_haploreg_result()
         } else {
                 snp_results_df = do.call(rbind, snp_population_results_list)
         }
+        attr(snp_results_df, "haploreg_failed") = any(population_failures)
+        if (any(population_failures)) {
+                attr(snp_results_df, "failed_populations") = populations[population_failures]
+                attr(snp_results_df, "failure_reasons") = population_failure_reasons[population_failures]
+        } else {
+                attr(snp_results_df, "failed_populations") = character()
+                attr(snp_results_df, "failure_reasons") = character()
+        }
 
         # anti rate limit from Daniel's script
         if (!is.null(sleep_range) && length(sleep_range) == 2 && all(sleep_range >= 0)) {
                 Sys.sleep(stats::runif(1, min(sleep_range), max(sleep_range)))
         }
-
         return(snp_results_df)
 }
 
@@ -306,56 +364,64 @@ get_ldsnp_info = function(
         haploreg_timeout
 ) {
         payload = list(query = snp_id, ldThresh = r2_cutoff, ldPop = population, submit = "Submit", output = "text")
-        response = tryCatch({httr::POST(
-                haploreg_url,
-                body = payload,
-                encode = "form",
-                httr::timeout(haploreg_timeout)
-        )}, error = function(e) {
-                NULL
-        })
+        response_error = NULL
+        response = tryCatch(
+                {httr::POST(haploreg_url, body = payload, encode = "form", httr::timeout(haploreg_timeout))},
+                error = function(e) {response_error <<- conditionMessage(e); NULL}
+        )
+        if (is.null(response)) {
+                return(.failed_haploreg_result(reason = paste0("request error: ", response_error)))
+        }
+        if (httr::http_error(response)) {
+                return(.failed_haploreg_result(reason = paste0("HTTP ", httr::status_code(response))))
+        }
+        content_error = NULL
+        content = tryCatch(
+                {httr::content(response, "text", encoding = "UTF-8")},
+                error = function(e) {content_error <<- conditionMessage(e); ""}
+        )
+        if (!is.null(content_error)) {
+                return(.failed_haploreg_result(reason = paste0("content error: ", content_error)))
+        }
+        if (length(content) == 0 || all(is.na(content)) || !nzchar(paste(content, collapse = ""))) {
+                return(.failed_haploreg_result(reason = "empty response"))
+        }
+        content = paste(content, collapse = "\n")
 
-        # bad responses
-        if (is.null(response) || httr::http_error(response)) {
-                return(.empty_haploreg_result())
-        }
-        content = tryCatch({
-                httr::content(response, "text", encoding = "UTF-8")
-        }, error = function(e) {
-                ""
-        })
-        if (length(content) == 0 || is.na(content) || content == "") {
-                return(.empty_haploreg_result())
-        }
         if (grepl("<html|Gateway Time-out|504|server didn't respond", content, ignore.case = T)) {
-                return(.empty_haploreg_result())
+                return(.failed_haploreg_result(reason = "HTML or gateway timeout response"))
         }
 
-        # good response
         content_lines = strsplit(content, split = "\n")[[1]]
         content_lines = gsub("\r", "", content_lines)
         content_lines = content_lines[content_lines != ""]
-        if (length(content_lines) < 2) {
-                return(.empty_haploreg_result())
+        if (length(content_lines) == 0) {
+                return(.failed_haploreg_result(reason = "response contained no header"))
         }
-        header = strsplit(content_lines[1], split = "\t")[[1]]
-        if (!any(header %in% c("rsID", "rsid", "RSID")) || !any(header %in% c("chr", "chrom", "chromosome"))) {
-                return(.empty_haploreg_result())
+        header = trimws(strsplit(content_lines[1], split = "\t")[[1]])
+        header_lower = tolower(header)
+        if (!any(header_lower %in% c("rsid", "rs_id")) || !any(header_lower %in% c("chr", "chrom", "chromosome"))) {
+                return(.failed_haploreg_result(reason = "unexpected response header"))
         }
-        results_table = tryCatch({utils::read.delim(
-                text = paste(content_lines, collapse = "\n"),
-                header = T,
-                sep = "\t",
-                stringsAsFactors = F,
-                check.names = F,
-                fill = T
-        )}, error = function(e) {
-                .empty_haploreg_result()
-        })
 
-        # fmt df
+        parse_error = NULL
+        results_table = tryCatch(
+                {utils::read.delim(text = paste(content_lines, collapse = "\n"),
+                        header = T,
+                        sep = "\t",
+                        stringsAsFactors = F,
+                        check.names = F,
+                        fill = T
+                )},
+                error = function(e) {parse_error <<- conditionMessage(e); NULL}
+        )
+        if (is.null(results_table)) {
+                return(.failed_haploreg_result(reason = paste0("table parsing error: ", parse_error)))
+        }
+
+        # valid Haploreg response with no rows
         if (nrow(results_table) == 0) {
-                return(.empty_haploreg_result())
+                return(.successful_empty_haploreg_result())
         }
         results_table = .standardize_haploreg_columns(
                 results_table = results_table,
@@ -363,15 +429,17 @@ get_ldsnp_info = function(
                 population = population
         )
         if (nrow(results_table) == 0) {
-                return(.empty_haploreg_result())
+                return(.successful_empty_haploreg_result())
         }
-
-        # filter by r2
-        r2_numeric = suppressWarnings(as.numeric(results_table$r2))
+        r2_numeric = suppressWarnings(
+                as.numeric(results_table$r2)
+        )
         results_table = results_table[!is.na(r2_numeric) & r2_numeric >= r2_cutoff,]
         if (nrow(results_table) == 0) {
-                return(.empty_haploreg_result())
+                return(.successful_empty_haploreg_result())
         }
+        attr(results_table, "haploreg_failed") = F
+        attr(results_table, "failure_reason") = NA_character_
         return(results_table)
 }
 
@@ -392,6 +460,35 @@ get_ldsnp_info = function(
                 query_snp_rsid = character(),
                 stringsAsFactors = F
         )
+}
+
+
+.successful_empty_haploreg_result = function() {
+        result = .empty_haploreg_result()
+        attr(result, "haploreg_failed") = F
+        attr(result, "failure_reason") = NA_character_
+        return(result)
+}
+
+
+.failed_haploreg_result = function(reason) {
+        result = .empty_haploreg_result()
+        attr(result, "haploreg_failed") = T
+        attr(result, "failure_reason") = as.character(reason)
+        return(result)
+}
+
+
+.write_failed_haploreg_snps = function(failed_snps, failed_snp_file) {
+        failed_snps = unique(as.character(failed_snps))
+        failed_snps = failed_snps[!is.na(failed_snps) & nzchar(failed_snps)]
+        failed_dir = dirname(failed_snp_file)
+        if (!dir.exists(failed_dir)) {
+                dir.create(failed_dir, recursive = T)
+        }
+        writeLines(failed_snps, con = failed_snp_file)
+        cat("[INFO] Failed HaploReg SNPs written:", length(failed_snps), "\n")
+        invisible(failed_snp_file)
 }
 
 
@@ -483,14 +580,16 @@ get_ldsnp_info_main = function(
         r2_cutoff = 0.5,
         for_cnv_call = F,
         output_dir = "./",
-        output_file = NA)
-{
+        output_file = NA,
+        failed_snp_file = NA
+) {
         get_ldsnp_info(
                 index_snp_file = index_snp_file,
                 population = population,
                 r2_cutoff = r2_cutoff,
                 for_cnv_call = for_cnv_call,
                 output_dir = output_dir,
-                output_file = output_file
+                output_file = output_file,
+                failed_snp_file = failed_snp_file
         )
 }
