@@ -95,7 +95,7 @@ get_overlap_mat = function(snp_info_gr, peak_gr_list){
 
         # fill in the matrix
         for (i in 1:biofeature_num){
-                overlap_mat[, i + 1] = GenomicRanges::overlapsAny(snp_info_gr, peak_gr_list[[i]])
+                overlap_mat[, i + 1] = IRanges::overlapsAny(snp_info_gr, peak_gr_list[[i]])
         }
 
         return(overlap_mat)

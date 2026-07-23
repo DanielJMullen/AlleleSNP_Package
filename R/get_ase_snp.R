@@ -82,10 +82,8 @@ genotype_infer = function(ref, alt, het_threshold = 0.1) {
         } else if (het_threshold < 1 & het_threshold > 0) {
                 if (all (max (ceiling(ref_v_alt_vec * het_threshold)) < ref_v_alt_vec)) {
                         return (T)
-                        break()
                 } else {
                         return (F)
-                        break()
                 }
         } else return (NA)
 }
