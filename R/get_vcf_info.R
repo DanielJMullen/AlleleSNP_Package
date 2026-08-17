@@ -89,6 +89,18 @@ read_vcfFile = function(vcf_file, param) {
 }
 
 
+.process_vcf_file = function(vcf_file, vcf_file_short, snp_param) {
+        cat("reading", vcf_file, "\n")
+
+        vcf_data = read_vcfFile(vcf_file, snp_param)
+        vcf_software = get_vcf_software(vcf_file_short)
+        vcf_data_het = sel_hetSnps_vcf(vcf_data)
+        vcf_data_df = process_vcf_data(vcf_data_het, vcf_software)
+
+        return(vcf_data_df)
+}
+
+
 # 3. process vcf list data -------------------------------------------------------------------------------------
 process_vcf_list = function(vcf_list) {
 # To process vcf list
@@ -163,7 +175,7 @@ process_vcf_data = function(vcf_data, vcf_software = "GATK") {
         })
 
         # add ref and alt allele counts information
-        vcf_data_gr = GenomicRanges::rowRanges(vcf_data)
+        vcf_data_gr = SummarizedExperiment::rowRanges(vcf_data)
         names(vcf_data_gr) = 1:length(vcf_data_gr)
         # vcf_data_df = as.data.frame(vcf_data_gr) # This might not work in R package. Don't know why
         vcf_data_df = data.frame(seqnames = vcf_data_gr@seqnames, vcf_data_gr@ranges, vcf_data_gr@elementMetadata)
@@ -235,7 +247,8 @@ get_vcf_info_main = function(
         output_dir = "./",
         sample_name = "",
         output_file = NA,
-        chromosome_annotation = "chr"
+        chromosome_annotation = "chr",
+        n_cores = 1
 ) {
 
         # 0. load packages
@@ -254,13 +267,52 @@ get_vcf_info_main = function(
                 chromosome_annotation = chromosome_annotation
         )
 
-        # 2. read vcf file into a list
-        vcf_list = gen_vcf_list(vcf_dir = vcf_dir,
-                                vcf_file = vcf_file,
-                                snp_info_gr = snp_info_list$snp_info_gr)
+        # 2. read and process vcf data
+        if (n_cores == 1) {
+                vcf_list = gen_vcf_list(vcf_dir = vcf_dir,
+                                        vcf_file = vcf_file,
+                                        snp_info_gr = snp_info_list$snp_info_gr)
 
-        # 3. process vcf data
-        vcf_df_list = process_vcf_list(vcf_list)
+                # 3. process vcf data
+                vcf_df_list = process_vcf_list(vcf_list)
+        } else {
+                if (!is.na(vcf_dir)) {
+                        vcf_files = list.files(
+                                vcf_dir,
+                                pattern = "\\.vcf(\\.gz)?$",
+                                full.names = T
+                        )
+                        vcf_files_short = list.files(
+                                vcf_dir,
+                                pattern = "\\.vcf(\\.gz)?$",
+                                full.names = F
+                        )
+                }
+                if (!is.na(vcf_file)) {
+                        vcf_files = vcf_file
+                        vcf_files_short = get_short_fileName(vcf_file)
+                }
+                if (!exists("vcf_files") || length(vcf_files) == 0) {
+                        stop("[ERROR] No .vcf or .vcf.gz files found")
+                }
+
+                snp_param = VariantAnnotation::ScanVcfParam(
+                        which = snp_info_list$snp_info_gr
+                )
+
+                vcf_df_list = parallel::mclapply(
+                        seq_along(vcf_files),
+                        function(i) {
+                                .process_vcf_file(
+                                        vcf_file = vcf_files[i],
+                                        vcf_file_short = vcf_files_short[i],
+                                        snp_param = snp_param
+                                )
+                        },
+                        mc.cores = min(n_cores, length(vcf_files))
+                )
+                names(vcf_df_list) = vcf_files_short
+        }
 
         # 4. add overlapping info to original snp table
         snp_info_addVcf_df = add_vcf_info (snp_info_df = snp_info_list$snp_info_df,

@@ -192,7 +192,7 @@ add_bam_sample_info = function(bam_list, bam_lib){
                 }
                 # add tag sample and library information
                 bam_list[[i]]$tag$sm = bam_lib
-                bam_list[[i]]$tag$lb = rep(bam_lib, length(bam_list[[i]]$seq))
+                bam_list[[i]]$tag$lb = rep(bam_lib, length(bam_list[[i]]$pos))
         }
 
         return(bam_list)
@@ -220,12 +220,17 @@ add_bam_base_info = function(bam_list, snp_info_list) {
         for (i in 1: length(bam_list)){
 
                 bam_list_i= bam_list[[i]]
-                seq_list = bam_list_i$seq
-
                 # if there's no reads on that snp in chip-seq, just assign NA
-                if (length(seq_list) == 0) {
+                if (length(bam_list_i$pos) == 0) {
                         bam_list[[i]]$snp$base = NA
                         bam_list[[i]]$snp$base_qual = NA
+
+                        if (!is.null(bam_list[[i]]$.read_index)) {
+                                bam_list[[i]]$seq = NULL
+                                bam_list[[i]]$qual = NULL
+                                bam_list[[i]]$.read_index = NULL
+                        }
+
                         next
                 } else {
                         bam_list[[i]] = parse_base_info_snp(bam_list_i)
@@ -248,12 +253,17 @@ parse_base_info_snp = function(bam_list_i){
         seq_qual_list = bam_list_i$qual
         snp_rel_loc_vec = get_relative_loc(bam_list_i)
 
+        seq_index = 1:length(bam_list_i$pos)
+        if (!is.null(bam_list_i$.read_index)) {
+                seq_index = bam_list_i$.read_index
+        }
+
         base_vec = vector()
         base_qual_vec = vector()
 
-        for (j in 1:length(seq_list)){
-                seq_j = seq_list[[j]]
-                seq_qual_j = seq_qual_list[[j]]
+        for (j in 1:length(seq_index)){
+                seq_j = seq_list[[seq_index[j]]]
+                seq_qual_j = seq_qual_list[[seq_index[j]]]
                 snp_rel_loc_j = snp_rel_loc_vec[j]
 
                 if (snp_rel_loc_j > length(seq_j) | snp_rel_loc_j < 1 | is.na(snp_rel_loc_j)) {
@@ -276,6 +286,12 @@ parse_base_info_snp = function(bam_list_i){
                 bam_list_i$snp$base_qual = base_qual_vec - 33 # for phred score of illumina 1.8+
         }
 
+        if (!is.null(bam_list_i$.read_index)) {
+                bam_list_i$seq = NULL
+                bam_list_i$qual = NULL
+                bam_list_i$.read_index = NULL
+        }
+
         return(bam_list_i)
 }
 
@@ -286,11 +302,11 @@ get_relative_loc = function(bam_list_i) {
         # Input: bam_list_i
         # Output: the relative location of the particular SNP
 
-        if (length(bam_list_i$seq) == 0) {
+        if (length(bam_list_i$pos) == 0) {
                 return (NA)
         }
 
-        snp_rel_loc_vec = rep(NA, length(bam_list_i$seq))
+        snp_rel_loc_vec = rep(NA, length(bam_list_i$pos))
 
         cigar_vec = bam_list_i$cigar
         qwidth_vec = bam_list_i$qwidth
@@ -352,7 +368,7 @@ filter_bam_list = function(bam_list, param_list) {
                 snp_alleles = c(bam_list_i$snp$ref, bam_list_i$snp$alt)
                 if (is.null (bam_list_i$index_del_vec)) bam_list_i$index_del_vec = vector()
                 # if there's no reads on that SNP in chip-seq, just go next round
-                if (length(bam_list_i$seq) == 0){
+                if (length(bam_list_i$pos) == 0){
                         next
                 } else {
                         # filter reads of duplicates
@@ -557,7 +573,7 @@ merge_replicates_table = function(ad_table) {
 .subset_bam_result = function(bam_list_i, index) {
         result = bam_list_i
 
-        for (field in setdiff(names(bam_list_i), "tag")) {
+        for (field in setdiff(names(bam_list_i), c("tag", "seq", "qual"))) {
                 result[[field]] = bam_list_i[[field]][index]
         }
 
@@ -566,6 +582,8 @@ merge_replicates_table = function(ad_table) {
                         x[index]
                 })
         }
+
+        result$.read_index = index
 
         return(result)
 }
@@ -634,9 +652,289 @@ merge_replicates_table = function(ad_table) {
 }
 
 
+# helper function: add bam base information by query cluster ---------------------------------------------------------------
+
+.add_bam_base_info_clustered = function(
+        bam_list,
+        snp_info_list,
+        snp_cluster
+) {
+        # add SNP information
+        for (i in 1:length(bam_list)) {
+                bam_list[[i]]$snp$id = snp_info_list$snp_id[i]
+                bam_list[[i]]$snp$chr = snp_info_list$snp_chr[i]
+                bam_list[[i]]$snp$pos = snp_info_list$snp_pos[i]
+                bam_list[[i]]$snp$ref = snp_info_list$snp_ref[i]
+                bam_list[[i]]$snp$alt = snp_info_list$snp_alt[i]
+        }
+
+        cluster_snp_list = split(
+                1:length(bam_list),
+                snp_cluster
+        )
+
+        for (cluster_name in names(cluster_snp_list)) {
+                snp_index = cluster_snp_list[[cluster_name]]
+
+                read_count = vapply(
+                        snp_index,
+                        function(i) {
+                                length(bam_list[[i]]$pos)
+                        },
+                        integer(1)
+                )
+
+                # empty SNPs
+                empty_index = snp_index[read_count == 0]
+
+                for (snp_i in empty_index) {
+                        bam_list[[snp_i]]$snp$base = NA
+                        bam_list[[snp_i]]$snp$base_qual = NA
+
+                        bam_list[[snp_i]]$seq = NULL
+                        bam_list[[snp_i]]$qual = NULL
+                        bam_list[[snp_i]]$.read_index = NULL
+                }
+
+                active_index = snp_index[read_count > 0]
+
+                if (length(active_index) == 0) {
+                        next
+                }
+
+                active_count = vapply(
+                        active_index,
+                        function(i) {
+                                length(bam_list[[i]]$pos)
+                        },
+                        integer(1)
+                )
+
+                parent_seq = bam_list[[active_index[1]]]$seq
+                parent_qual = bam_list[[active_index[1]]]$qual
+
+                read_index_vec = unlist(
+                        lapply(
+                                active_index,
+                                function(i) {
+                                        bam_list[[i]]$.read_index
+                                }
+                        ),
+                        use.names = F
+                )
+
+                pos_vec = unlist(
+                        lapply(
+                                active_index,
+                                function(i) {
+                                        bam_list[[i]]$pos
+                                }
+                        ),
+                        use.names = F
+                )
+
+                qwidth_vec = unlist(
+                        lapply(
+                                active_index,
+                                function(i) {
+                                        bam_list[[i]]$qwidth
+                                }
+                        ),
+                        use.names = F
+                )
+
+                cigar_vec = unlist(
+                        lapply(
+                                active_index,
+                                function(i) {
+                                        bam_list[[i]]$cigar
+                                }
+                        ),
+                        use.names = F
+                )
+
+                snp_pos_vec = rep(
+                        snp_info_list$snp_pos[active_index],
+                        times = active_count
+                )
+
+                snp_rel_loc_vec = rep(
+                        NA,
+                        length(read_index_vec)
+                )
+
+                # perfect match / mismatch
+                perfect_match_index = which(
+                        cigar_vec == paste0(qwidth_vec, "M")
+                )
+
+                if (length(perfect_match_index) > 0) {
+                        snp_rel_loc_vec[perfect_match_index] =
+                                snp_pos_vec[perfect_match_index] -
+                                pos_vec[perfect_match_index] + 1
+                }
+
+                # 3' soft clipping
+                soft_clipping_3_index = which(
+                        grepl(
+                                "^[[:digit:]]+M[[:digit:]]+S$",
+                                cigar_vec
+                        )
+                )
+
+                if (length(soft_clipping_3_index) > 0) {
+                        snp_rel_loc_3_vec =
+                                snp_pos_vec[soft_clipping_3_index] -
+                                pos_vec[soft_clipping_3_index] + 1
+
+                        seq_len_vec = as.numeric(
+                                gsub(
+                                        "M[[:digit:]]+S",
+                                        "",
+                                        cigar_vec[soft_clipping_3_index]
+                                )
+                        )
+
+                        snp_rel_loc_3_vec[
+                                snp_rel_loc_3_vec > seq_len_vec
+                        ] = NA
+
+                        snp_rel_loc_vec[soft_clipping_3_index] =
+                                snp_rel_loc_3_vec
+                }
+
+                # 5' soft clipping
+                soft_clipping_5_index = which(
+                        grepl(
+                                "^[[:digit:]]+S[[:digit:]]+M$",
+                                cigar_vec
+                        )
+                )
+
+                if (length(soft_clipping_5_index) > 0) {
+                        soft_clipping_len_vec = as.numeric(
+                                gsub(
+                                        "S[[:digit:]]+M",
+                                        "",
+                                        cigar_vec[soft_clipping_5_index]
+                                )
+                        )
+
+                        snp_rel_loc_5_vec =
+                                snp_pos_vec[soft_clipping_5_index] -
+                                pos_vec[soft_clipping_5_index] + 1 +
+                                soft_clipping_len_vec
+
+                        snp_rel_loc_5_vec[
+                                snp_rel_loc_5_vec >
+                                qwidth_vec[soft_clipping_5_index]
+                        ] = NA
+
+                        snp_rel_loc_vec[soft_clipping_5_index] =
+                                snp_rel_loc_5_vec
+                }
+
+                seq_batch = parent_seq[read_index_vec]
+                qual_batch = parent_qual[read_index_vec]
+
+                seq_width_vec = IRanges::width(seq_batch)
+
+                valid_index = which(
+                        !is.na(snp_rel_loc_vec) &
+                        snp_rel_loc_vec >= 1 &
+                        snp_rel_loc_vec <= seq_width_vec
+                )
+
+                base_vec = rep(
+                        NA_character_,
+                        length(read_index_vec)
+                )
+
+                base_qual_vec = rep(
+                        NA_integer_,
+                        length(read_index_vec)
+                )
+
+                if (length(valid_index) > 0) {
+                        base_vec[valid_index] = as.character(
+                                Biostrings::subseq(
+                                        seq_batch[valid_index],
+                                        start =
+                                                snp_rel_loc_vec[valid_index],
+                                        width = 1
+                                )
+                        )
+
+                        base_qual_char = as.character(
+                                Biostrings::subseq(
+                                        qual_batch[valid_index],
+                                        start =
+                                                snp_rel_loc_vec[valid_index],
+                                        width = 1
+                                )
+                        )
+
+                        base_qual_vec[valid_index] =
+                                utf8ToInt(
+                                        paste0(
+                                                base_qual_char,
+                                                collapse = ""
+                                        )
+                                )
+                }
+
+                end_index = cumsum(active_count)
+                start_index = c(
+                        1,
+                        end_index[-length(end_index)] + 1
+                )
+
+                for (j in 1:length(active_index)) {
+                        snp_i = active_index[j]
+                        index = start_index[j]:end_index[j]
+
+                        base_i = base_vec[index]
+                        base_qual_i = base_qual_vec[index]
+
+                        # preserve original parser type for all-NA base vectors
+                        if (all(is.na(base_i))) {
+                                base_i = rep(NA, length(base_i))
+                        }
+
+                        bam_list[[snp_i]]$snp$base = base_i
+
+                        if (
+                                any(
+                                        base_qual_i > (41 + 33),
+                                        na.rm = T
+                                )
+                        ) {
+                                bam_list[[snp_i]]$snp$base_qual =
+                                        base_qual_i - 64
+                        } else {
+                                bam_list[[snp_i]]$snp$base_qual =
+                                        base_qual_i - 33
+                        }
+
+                        bam_list[[snp_i]]$seq = NULL
+                        bam_list[[snp_i]]$qual = NULL
+                        bam_list[[snp_i]]$.read_index = NULL
+                }
+        }
+
+        return(bam_list)
+}
+
+
 # helper function: process bam data ---------------------------------------------------------------------------------
 
-.process_bam_data = function(bam_list, bam_file, snp_info_list, param_list) {
+.process_bam_data = function(
+        bam_list,
+        bam_file,
+        snp_info_list,
+        param_list,
+        snp_cluster = NULL
+) {
         cat("processing reads ...", bam_file, "\n")
 
         # step 3-1: add bam information
@@ -646,8 +944,18 @@ merge_replicates_table = function(ad_table) {
         cat(paste(bam_file, "step_3.1", sep = "_"))
 
         # step 3-2: add base quality information
-        bam_list_add_bam_base_q = add_bam_base_info(bam_list= bam_list_add_bam_sample_info,
-                                                    snp_info_list = snp_info_list)
+        if (is.null(snp_cluster)) {
+                bam_list_add_bam_base_q = add_bam_base_info(
+                        bam_list = bam_list_add_bam_sample_info,
+                        snp_info_list = snp_info_list
+                )
+        } else {
+                bam_list_add_bam_base_q = .add_bam_base_info_clustered(
+                        bam_list = bam_list_add_bam_sample_info,
+                        snp_info_list = snp_info_list,
+                        snp_cluster = snp_cluster
+                )
+        }
         cat(paste(bam_file, "step_3.2", sep = "_"))
 
         # step 3-3: filter low base/mapping quality reads --- after this step, we can get relatively clean data
@@ -762,7 +1070,8 @@ get_alleleDist_info_main = function(
                                 ad_table_i = .process_bam_data(bam_list = bam_list,
                                                                bam_file = bam_files[[i]],
                                                                snp_info_list = snp_info_list,
-                                                               param_list = param_list)
+                                                               param_list = param_list,
+                                                               snp_cluster = bam_data_info$snp_cluster)
 
                                 # add allele-distribution table together
                                 ad_table = rbind(ad_table, ad_table_i)
@@ -785,7 +1094,8 @@ get_alleleDist_info_main = function(
                                         ad_table_i = .process_bam_data(bam_list = bam_list,
                                                                        bam_file = bam_files[[i]],
                                                                        snp_info_list = snp_info_list,
-                                                                       param_list = param_list)
+                                                                       param_list = param_list,
+                                                                       snp_cluster = bam_data_info$snp_cluster)
 
                                         rm(bam_list)
                                         gc()

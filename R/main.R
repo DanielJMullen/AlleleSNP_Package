@@ -34,6 +34,7 @@ get_assnp = function(
         output_dir = NA,
         output_file = NA,
         chromosome_annotation = "chr",
+        n_cores = 1,
         ...
 ) {
 
@@ -82,6 +83,7 @@ get_assnp = function(
                 mapq_threshold = mapq_threshold,
                 merge_replicates = merge_replicates,
                 chromosome_annotation = chromosome_annotation,
+                n_cores = n_cores,
                 ...
         )
 
@@ -106,7 +108,8 @@ get_assnp = function(
                         vcf_dir = vcf_dir,
                         output_dir = output_dir,
                         sample_name = sample_name,
-                        chromosome_annotation = chromosome_annotation
+                        chromosome_annotation = chromosome_annotation,
+                        n_cores = n_cores
                 )
         } else {
                 snp_info_addVcf_list = list()
