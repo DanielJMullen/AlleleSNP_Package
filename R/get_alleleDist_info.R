@@ -290,25 +290,44 @@ get_relative_loc = function(bam_list_i) {
                 return (NA)
         }
 
-        snp_rel_loc_vec = vector(length = length(bam_list_i$seq))
+        snp_rel_loc_vec = rep(NA, length(bam_list_i$seq))
 
-        # calculate relative location based on cigar
-        for (j in 1:length(bam_list_i$seq)) {
-                cigar_j = bam_list_i$cigar[j]
-                if (cigar_j == paste0(bam_list_i$qwidth[j], "M")) {
-                        snp_rel_loc_vec[j] = bam_list_i$snp$pos - bam_list_i$pos[j] + 1 # perfect match / mismatch
-                } else if (grepl("^[[:digit:]]+M[[:digit:]]+S$", cigar_j)) { # 3' soft clipping
-                        snp_rel_loc_vec[j] = bam_list_i$snp$pos - bam_list_i$pos[j] + 1
-                        seq_len = as.numeric(gsub("M[[:digit:]]+S", "", cigar_j))
-                        if (snp_rel_loc_vec[j] > seq_len) snp_rel_loc_vec[j] = NA
-                } else if (grepl("^[[:digit:]]+S[[:digit:]]+M$", cigar_j)) { # 5' soft clipping
-                        soft_clipping_len = as.numeric(gsub("S[[:digit:]]+M", "", cigar_j))
-                        #       seq_len = bam_list_i$qwidth[j] - soft_clipping_len
-                        snp_rel_loc_vec[j] = bam_list_i$snp$pos - bam_list_i$pos[j] + 1 + soft_clipping_len
-                        if (snp_rel_loc_vec[j] > bam_list_i$qwidth[j]) snp_rel_loc_vec[j] = NA
-                } else {
-                        snp_rel_loc_vec[j] = NA # if there's indel, ignore the read
-                }
+        cigar_vec = bam_list_i$cigar
+        qwidth_vec = bam_list_i$qwidth
+        pos_vec = bam_list_i$pos
+
+        # perfect match / mismatch
+        perfect_match_index = which(cigar_vec == paste0(qwidth_vec, "M"))
+        if (length(perfect_match_index) > 0) {
+                snp_rel_loc_vec[perfect_match_index] =
+                        bam_list_i$snp$pos - pos_vec[perfect_match_index] + 1
+        }
+
+        # 3' soft clipping
+        soft_clipping_3_index = which(grepl("^[[:digit:]]+M[[:digit:]]+S$", cigar_vec))
+        if (length(soft_clipping_3_index) > 0) {
+                snp_rel_loc_3_vec =
+                        bam_list_i$snp$pos - pos_vec[soft_clipping_3_index] + 1
+                seq_len_vec = as.numeric(
+                        gsub("M[[:digit:]]+S", "", cigar_vec[soft_clipping_3_index])
+                )
+                snp_rel_loc_3_vec[snp_rel_loc_3_vec > seq_len_vec] = NA
+                snp_rel_loc_vec[soft_clipping_3_index] = snp_rel_loc_3_vec
+        }
+
+        # 5' soft clipping
+        soft_clipping_5_index = which(grepl("^[[:digit:]]+S[[:digit:]]+M$", cigar_vec))
+        if (length(soft_clipping_5_index) > 0) {
+                soft_clipping_len_vec = as.numeric(
+                        gsub("S[[:digit:]]+M", "", cigar_vec[soft_clipping_5_index])
+                )
+                snp_rel_loc_5_vec =
+                        bam_list_i$snp$pos - pos_vec[soft_clipping_5_index] + 1 +
+                        soft_clipping_len_vec
+                snp_rel_loc_5_vec[
+                        snp_rel_loc_5_vec > qwidth_vec[soft_clipping_5_index]
+                ] = NA
+                snp_rel_loc_vec[soft_clipping_5_index] = snp_rel_loc_5_vec
         }
 
         return (snp_rel_loc_vec)
@@ -492,6 +511,161 @@ merge_replicates_table = function(ad_table) {
         return(ad_table_summ)
 }
 
+# helper function: merge local bam query regions --------------------------------------------------------------------
+
+.merge_snp_queries = function(snp_info_gr, distance_threshold = 2500) {
+        chr_vec = as.character(GenomicRanges::seqnames(snp_info_gr))
+        pos_vec = GenomicRanges::start(snp_info_gr)
+
+        merged_chr = character()
+        merged_start = integer()
+        merged_end = integer()
+        snp_cluster = integer(length(snp_info_gr))
+
+        cluster_index = 0
+
+        for (chr_i in unique(chr_vec)) {
+                snp_index = which(chr_vec == chr_i)
+                pos_chr = pos_vec[snp_index]
+
+                cluster_start_index = c(1, which(diff(pos_chr) > distance_threshold) + 1)
+                cluster_end_index = c(cluster_start_index[-1] - 1, length(pos_chr))
+
+                for (j in 1:length(cluster_start_index)) {
+                        cluster_index = cluster_index + 1
+                        local_index = cluster_start_index[j]:cluster_end_index[j]
+                        original_index = snp_index[local_index]
+
+                        merged_chr = c(merged_chr, chr_i)
+                        merged_start = c(merged_start, pos_chr[cluster_start_index[j]])
+                        merged_end = c(merged_end, pos_chr[cluster_end_index[j]])
+                        snp_cluster[original_index] = cluster_index
+                }
+        }
+
+        merged_gr = GenomicRanges::GRanges(
+                seqnames = merged_chr,
+                ranges = IRanges::IRanges(start = merged_start, end = merged_end)
+        )
+
+        return(list(merged_gr = merged_gr, snp_cluster = snp_cluster))
+}
+
+
+# helper function: subset bam scan result ---------------------------------------------------------------------------
+
+.subset_bam_result = function(bam_list_i, index) {
+        result = bam_list_i
+
+        for (field in setdiff(names(bam_list_i), "tag")) {
+                result[[field]] = bam_list_i[[field]][index]
+        }
+
+        if ("tag" %in% names(bam_list_i)) {
+                result$tag = lapply(bam_list_i$tag, function(x) {
+                        x[index]
+                })
+        }
+
+        return(result)
+}
+
+
+# helper function: reconstruct snp bam information ------------------------------------------------------------------
+
+.reconstruct_bam_list = function(bam_list, snp_info_gr, snp_cluster) {
+        snp_pos = GenomicRanges::start(snp_info_gr)
+        reconstructed_bam_list = vector("list", length(snp_info_gr))
+        cluster_snp_list = split(1:length(snp_info_gr), snp_cluster)
+
+        for (cluster_name in names(cluster_snp_list)) {
+                cluster_i = as.integer(cluster_name)
+                bam_list_i = bam_list[[cluster_i]]
+                snp_index = cluster_snp_list[[cluster_name]]
+
+                if (length(bam_list_i$pos) == 0) {
+                        for (snp_i in snp_index) {
+                                reconstructed_bam_list[[snp_i]] =
+                                        .subset_bam_result(bam_list_i, integer())
+                        }
+                        next
+                }
+
+                ref_width = cigarillo::cigar_extent_along_ref(bam_list_i$cigar)
+                alignment_end = bam_list_i$pos + ref_width - 1
+
+                for (snp_i in snp_index) {
+                        index = which(
+                                bam_list_i$pos <= snp_pos[snp_i] &
+                                alignment_end >= snp_pos[snp_i]
+                        )
+
+                        reconstructed_bam_list[[snp_i]] =
+                                .subset_bam_result(bam_list_i, index)
+                }
+        }
+
+        return(reconstructed_bam_list)
+}
+
+
+# helper function: get local bam file information -------------------------------------------------------------------
+
+.get_local_bam_info = function(snp_info_gr, param_list) {
+        dir_bam = param_list$bam_dir
+        cell_sel = param_list$cell_sel
+
+        bam_files = as.character(list.files(dir_bam, paste0(cell_sel, ".*.bam$")))
+        if (length(bam_files) == 0) {
+                stop("No bam files with the selected cell type is found.
+                     Please modify the local bam directory or cell types.\n")
+        }
+
+        query_info = .merge_snp_queries(snp_info_gr = snp_info_gr)
+
+        what = c("qname", "flag","rname","pos", "mapq", "cigar","seq", "qual","strand", "qwidth")
+        tag = c("NM", "RG","MD")
+        param = Rsamtools::ScanBamParam(which = query_info$merged_gr, what = what, tag = tag)
+
+        return(list(dir_bam = dir_bam,
+                    bam_files = bam_files,
+                    param = param,
+                    snp_cluster = query_info$snp_cluster))
+}
+
+
+# helper function: process bam data ---------------------------------------------------------------------------------
+
+.process_bam_data = function(bam_list, bam_file, snp_info_list, param_list) {
+        cat("processing reads ...", bam_file, "\n")
+
+        # step 3-1: add bam information
+        bam_lib = gsub(".bam","", bam_file)
+        bam_list_add_bam_sample_info = add_bam_sample_info(bam_list= bam_list,
+                                                           bam_lib= bam_lib)
+        cat(paste(bam_file, "step_3.1", sep = "_"))
+
+        # step 3-2: add base quality information
+        bam_list_add_bam_base_q = add_bam_base_info(bam_list= bam_list_add_bam_sample_info,
+                                                    snp_info_list = snp_info_list)
+        cat(paste(bam_file, "step_3.2", sep = "_"))
+
+        # step 3-3: filter low base/mapping quality reads --- after this step, we can get relatively clean data
+        bam_list_filter = filter_bam_list(bam_list= bam_list_add_bam_base_q, param_list)
+        cat(paste(bam_file, "step_3.3", sep = "_"))
+
+        # step 3-4: calculate allele-distribution statistics
+        bam_list_add_stats = add_bam_reads_stats(bam_list= bam_list_filter)
+        cat(paste(bam_file, "step_3.4", sep = "_"))
+
+        # step 3-5: generate allele-distribution table
+        ad_table_i = gen_allele_distribution_table(bam_list= bam_list_add_stats)
+        cat(paste(bam_file, "step_3.5", sep = "_"))
+
+        return(ad_table_i)
+}
+
+
 ### --------------------------------------------------------------------------------- ###
 ### ------- main function: to check allele distribution of snps in batch mode ------- ###
 ### --------------------------------------------------------------------------------- ###
@@ -508,7 +682,8 @@ get_alleleDist_info_main = function(
         bam_dir = "./",
         rmdup_file = F,
         merge_replicates = F,
-        chromosome_annotation = "chr"
+        chromosome_annotation = "chr",
+        n_cores = 1
 ) {
 
         ### -------------------- step 0-1: load the packages -------------------- ###
@@ -533,58 +708,98 @@ get_alleleDist_info_main = function(
                                            chromosome_annotation = chromosome_annotation)
 
         ### ------- step 2: read bam files that contain the snp region -------- ###
+        # initialize a data frame for allele-distribution
+        ad_table = data.frame()
+
         if (server != "local") {
                 dir.create('./bai_files') # create a directory and store the bai files
                 setwd('./bai_files')
                 cat(".bai files will be downloaded in ", getwd(), '\n')
                 bam_data_list = read_bam_files(snp_info_gr = snp_info_list$snp_info_gr, param_list)
                 setwd("../")
+
+                ### --------------------- step 3: process bam data --------------------- ###
+                # extract bam data
+                bam_files = bam_data_list$bam_files
+                bam_super_list = bam_data_list$bam_super_list
+
+                # for each bam file, process data...
+                for (i in 1: length(bam_files)) {
+                        # ----- test ----- #
+                        # print(i)
+                        # ---------------- #
+
+                        ad_table_i = .process_bam_data(bam_list = bam_super_list[[i]],
+                                                       bam_file = bam_files[[i]],
+                                                       snp_info_list = snp_info_list,
+                                                       param_list = param_list)
+
+                        # add allele-distribution table together
+                        ad_table = rbind(ad_table, ad_table_i)
+                }
         } else {
-                bam_data_list = read_bam_files(snp_info_gr = snp_info_list$snp_info_gr, param_list)
-        }
+                bam_data_info = .get_local_bam_info(snp_info_gr = snp_info_list$snp_info_gr,
+                                                    param_list = param_list)
 
-        ### --------------------- step 3: process bam data --------------------- ###
-        # extract bam data
-        bam_files = bam_data_list$bam_files
-        bam_super_list = bam_data_list$bam_super_list
+                bam_files = bam_data_info$bam_files
 
-        # initialize a data frame for allele-distribution
-        ad_table = data.frame()
+                ### --------------------- step 3: process bam data --------------------- ###
+                if (n_cores == 1) {
+                        # for each bam file, read and process data...
+                        for (i in 1: length(bam_files)) {
+                                # ----- test ----- #
+                                # print(i)
+                                # ---------------- #
 
-        # for each bam file, process data...
-        for (i in 1: length(bam_files)) {
-                # ----- test ----- #
-                # print(i)
-                # ---------------- #
+                                file = bam_files[i]
+                                cat("reading", file , '\n')
+                                bam_file_link = paste0(bam_data_info$dir_bam, "/", file)
+                                bam_list = Rsamtools::scanBam(bam_file_link, param = bam_data_info$param)
+                                bam_list = .reconstruct_bam_list(bam_list = bam_list,
+                                                                 snp_info_gr = snp_info_list$snp_info_gr,
+                                                                 snp_cluster = bam_data_info$snp_cluster)
 
-                cat("processing reads ...", bam_files[[i]], "\n")
+                                ad_table_i = .process_bam_data(bam_list = bam_list,
+                                                               bam_file = bam_files[[i]],
+                                                               snp_info_list = snp_info_list,
+                                                               param_list = param_list)
 
-                # step 3-1: add bam information
-                bam_lib = gsub(".bam","", bam_files[[i]])
-                bam_list = bam_super_list[[i]]
-                bam_list_add_bam_sample_info = add_bam_sample_info(bam_list= bam_list,
-                                                                   bam_lib= bam_lib)
-                cat(paste(bam_files[[i]], "step_3.1", sep = "_"))
+                                # add allele-distribution table together
+                                ad_table = rbind(ad_table, ad_table_i)
 
-                # step 3-2: add base quality information
-                bam_list_add_bam_base_q = add_bam_base_info(bam_list= bam_list_add_bam_sample_info,
-                                                            snp_info_list = snp_info_list)
-                cat(paste(bam_files[[i]], "step_3.2", sep = "_"))
+                                rm(bam_list)
+                                gc()
+                        }
+                } else {
+                        ad_table_list = parallel::mclapply(
+                                1:length(bam_files),
+                                function(i) {
+                                        file = bam_files[i]
+                                        cat("reading", file , '\n')
+                                        bam_file_link = paste0(bam_data_info$dir_bam, "/", file)
+                                        bam_list = Rsamtools::scanBam(bam_file_link, param = bam_data_info$param)
+                                        bam_list = .reconstruct_bam_list(bam_list = bam_list,
+                                                                         snp_info_gr = snp_info_list$snp_info_gr,
+                                                                         snp_cluster = bam_data_info$snp_cluster)
 
-                # step 3-3: filter low base/mapping quality reads --- after this step, we can get relatively clean data
-                bam_list_filter = filter_bam_list(bam_list= bam_list_add_bam_base_q, param_list)
-                cat(paste(bam_files[[i]], "step_3.3", sep = "_"))
+                                        ad_table_i = .process_bam_data(bam_list = bam_list,
+                                                                       bam_file = bam_files[[i]],
+                                                                       snp_info_list = snp_info_list,
+                                                                       param_list = param_list)
 
-                # step 3-4: calculate allele-distribution statistics
-                bam_list_add_stats = add_bam_reads_stats(bam_list= bam_list_filter)
-                cat(paste(bam_files[[i]], "step_3.4", sep = "_"))
+                                        rm(bam_list)
+                                        gc()
 
-                # step 3-5: generate allele-distribution table
-                ad_table_i = gen_allele_distribution_table(bam_list= bam_list_add_stats)
-                cat(paste(bam_files[[i]], "step_3.5", sep = "_"))
+                                        return(ad_table_i)
+                                },
+                                mc.cores = n_cores
+                        )
 
-                # add allele-distribution table together
-                ad_table = rbind(ad_table, ad_table_i)
+                        # add allele-distribution tables together in bam file order
+                        for (i in 1:length(ad_table_list)) {
+                                ad_table = rbind(ad_table, ad_table_list[[i]])
+                        }
+                }
         }
 
         if (merge_replicates && nrow(ad_table) > 0) {

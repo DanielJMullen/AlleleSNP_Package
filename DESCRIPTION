@@ -12,6 +12,7 @@ Imports:
     dplyr,
     GenomicRanges,
     IRanges,
+    cigarillo,
     Rsamtools,
     rtracklayer,
     VariantAnnotation
